@@ -1,0 +1,20 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+*.log
+logs/
+dist/
+coverage/
+
+# Archivos de datos
+src/data/sync-history.json
+data/uploads/
+
+# Uploads de CSV
+uploads/
+data/*.csv
+
+# Archivos temporales
+*.tmp
+*.temp

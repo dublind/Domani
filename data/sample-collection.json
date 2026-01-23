@@ -1,0 +1,100 @@
+{
+  "data": {
+    "date": "2026-01-21",
+    "localID": 1,
+    "restaurantID": "6512174172209152",
+    "shifts": {
+      "1": {
+        "name": "Turno AM",
+        "registers": {
+          "1": [
+            {
+              "closedCashier": null,
+              "closedCashierId": 4748071157628928,
+              "closedDate": "2026-01-21T14:30:00",
+              "finalAmount": 185000,
+              "initialAmount": 0,
+              "movements": [],
+              "openedCashier": null,
+              "openedCashierId": 4748071157628928,
+              "openedDate": "2026-01-21T09:00:00",
+              "paymentMethods": [
+                {
+                  "amount": 45000,
+                  "paymentMethod": "Efectivo",
+                  "paymentMethodID": 1000
+                },
+                {
+                  "amount": 62000,
+                  "paymentMethod": "Tarjeta Credito",
+                  "paymentMethodID": 2000
+                },
+                {
+                  "amount": 48000,
+                  "paymentMethod": "Tarjeta Debito",
+                  "paymentMethodID": 3000
+                },
+                {
+                  "amount": 30000,
+                  "paymentMethod": "UBER EATS",
+                  "paymentMethodID": 50004
+                }
+              ],
+              "registerName": "Caja AM"
+            }
+          ]
+        }
+      },
+      "2": {
+        "name": "Turno PM",
+        "registers": {
+          "1": [
+            {
+              "closedCashier": null,
+              "closedCashierId": 4748071157628928,
+              "closedDate": "2026-01-21T23:00:00",
+              "finalAmount": 320000,
+              "initialAmount": 0,
+              "movements": [],
+              "openedCashier": null,
+              "openedCashierId": 4748071157628928,
+              "openedDate": "2026-01-21T15:00:00",
+              "paymentMethods": [
+                {
+                  "amount": 85000,
+                  "paymentMethod": "Efectivo",
+                  "paymentMethodID": 1000
+                },
+                {
+                  "amount": 95000,
+                  "paymentMethod": "Tarjeta Credito",
+                  "paymentMethodID": 2000
+                },
+                {
+                  "amount": 78000,
+                  "paymentMethod": "Tarjeta Debito",
+                  "paymentMethodID": 3000
+                },
+                {
+                  "amount": 42000,
+                  "paymentMethod": "PEDIDOS YA",
+                  "paymentMethodID": 50012
+                },
+                {
+                  "amount": 20000,
+                  "paymentMethod": "RAPPI",
+                  "paymentMethodID": 50015
+                }
+              ],
+              "registerName": "Caja PM"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "ok": true,
+  "msg": {
+    "texto": "RESTAURANT: Domani Providencia, COLLECTION SENT"
+  }
+}
