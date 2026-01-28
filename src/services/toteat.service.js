@@ -1,221 +1,124 @@
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const config = require('../config/config');
 const logger = require('../utils/logger');
 
+// Configuracion API Toteat
+// URL de produccion (cambiar a toteatdev si es desarrollo)
+const TOTEAT_CONFIG = {
+  baseUrl: process.env.TOTEAT_BASE_URL || 'https://api.toteat.com/mw/or/1.0',
+  token: process.env.TOTEAT_TOKEN || 'C92Q8x9bq6Ix5QJWIQsvravh7Q1la7Np',
+  restaurantId: process.env.TOTEAT_RESTAURANT_ID || '6512174172209152',
+  localId: process.env.TOTEAT_LOCAL_ID || '1',
+  userId: process.env.TOTEAT_USER_ID || '1001'
+};
+
 class ToteatService {
-  constructor() {
-    this.apiUrl = config.toteat.apiUrl;
-    this.apiKey = config.toteat.apiKey;
-    this.restaurantId = config.toteat.restaurantId;
-    this.localId = config.toteat.localId || '1';
-    this.userId = config.toteat.apiUserId || '1001';
-    this.useLocalFile = process.env.TOTEAT_USE_LOCAL_FILE === 'true';
-    this.localFilePath = path.join(__dirname, '../../data/sample-collection.json');
-
-    this.client = axios.create({
-      baseURL: this.apiUrl,
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-      timeout: 10000
-    });
-  }
-
   /**
-   * Carga datos desde archivo local
-   * @returns {Object} - Datos de collection desde archivo
+   * Obtiene la recaudacion de un dia desde la API de Toteat
+   * @param {Date|string} date - Fecha a consultar
+   * @returns {Promise<Object>} - Datos de ventas del dia
    */
-  loadFromLocalFile() {
-    try {
-      logger.info(`Cargando datos desde archivo local: ${this.localFilePath}`);
-      const fileContent = fs.readFileSync(this.localFilePath, 'utf8');
-      const data = JSON.parse(fileContent);
-      logger.info('Datos cargados exitosamente desde archivo local');
-      return data.data;
-    } catch (error) {
-      logger.error(`Error cargando archivo local: ${error.message}`);
-      throw new Error(`No se pudo cargar el archivo local: ${error.message}`);
-    }
-  }
+  async getCollection(date = null) {
+    // Formatear fecha como YYYYMMDD
+    const targetDate = date ? new Date(date) : new Date();
+    const dateStr = targetDate.toISOString().split('T')[0].replace(/-/g, '');
 
-  /**
-   * Obtiene el reporte de cajas (collection) de Toteat
-   * @param {Date} date - Fecha del reporte (default: ayer)
-   * @returns {Promise<Object>} - Datos de cajas y métodos de pago
-   */
-  async getDailySalesReport(date = null) {
-    // Si está habilitado el modo local, cargar desde archivo
-    if (this.useLocalFile) {
-      logger.info('Modo local activado - cargando datos desde archivo');
-      return this.loadFromLocalFile();
-    }
+    logger.info(`Consultando API Toteat para fecha: ${dateStr}`);
 
     try {
-      const reportDate = date || new Date(Date.now() - 24 * 60 * 60 * 1000);
-      // Formato YYYYMMDD sin guiones
-      const formattedDate = reportDate.toISOString().split('T')[0].replace(/-/g, '');
+      // Todos los parametros van como query params segun documentacion Toteat
+      const url = `${TOTEAT_CONFIG.baseUrl}/collection?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&date=${dateStr}`;
 
-      logger.info(`Obteniendo reporte de cajas de Toteat para ${formattedDate}`);
-      logger.info(`URL: ${this.apiUrl}/collection`);
-      logger.info(`Params: xir=${this.restaurantId}, xil=${this.localId}, xiu=${this.userId}, date=${formattedDate}`);
+      logger.info(`URL: ${url}`);
 
-      const response = await this.client.get('/collection', {
-        params: {
-          xir: this.restaurantId,
-          xil: this.localId,
-          xiu: this.userId,
-          xapitoken: this.apiKey,
-          date: formattedDate
-        }
+      const response = await axios.get(url, {
+        timeout: 30000
       });
 
       if (response.data && response.data.ok) {
-        const collectionData = response.data.data || {};
-        logger.info(`Reporte de cajas obtenido exitosamente`);
-        logger.info(`Respuesta: ${response.data.msg.texto}`);
-        return collectionData;
+        logger.info('Datos obtenidos exitosamente de Toteat');
+        return {
+          success: true,
+          data: response.data.data,
+          message: response.data.msg?.texto || 'OK'
+        };
       } else {
-        throw new Error(response.data?.msg?.texto || 'Error desconocido en respuesta de Toteat');
+        throw new Error(response.data?.msg?.texto || 'Error en respuesta de Toteat');
       }
 
     } catch (error) {
-      logger.error('Error obteniendo reporte de Toteat:', {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        url: error.config?.url,
-        params: error.config?.params
-      });
+      logger.error('Error consultando API Toteat:', error.message);
 
-      if (error.response?.status === 404) {
-        throw new Error('Endpoint /collection no encontrado en Toteat. Verifica la URL del API.');
+      if (error.response) {
+        // Error de respuesta del servidor
+        const status = error.response.status;
+        if (status === 400) {
+          throw new Error('Parametros invalidos');
+        } else if (status === 429) {
+          throw new Error('Limite de solicitudes excedido (1 por minuto)');
+        }
       }
 
-      if (error.response?.data?.msg?.tipo === 7) {
-        throw new Error('Token de Toteat sin permisos de API. Contacta a soporte@toteat.com para activar permisos.');
-      }
-
-      throw new Error(`Error al obtener reporte de Toteat: ${error.message}`);
+      throw error;
     }
   }
 
   /**
-   * Verifica el estado de la conexión con Toteat
-   * @returns {Promise<Object>} - Estado de la conexión
+   * Procesa los datos de collection y extrae las ventas por producto
+   * @param {Object} collectionData - Datos crudos de la API
+   * @returns {Array} - Lista de productos con ventas
+   */
+  parseCollectionToProducts(collectionData) {
+    const products = [];
+
+    if (!collectionData || !collectionData.shifts) {
+      return products;
+    }
+
+    // Iterar por turnos
+    for (const shift of collectionData.shifts) {
+      if (!shift.sales) continue;
+
+      // Iterar por categorias de ventas
+      for (const category of shift.sales) {
+        if (!category.items) continue;
+
+        for (const item of category.items) {
+          products.push({
+            producto: item.name || '',
+            codigo: item.id || '',
+            cantidad: item.quantity || 0,
+            ventaSinImpuesto: item.total || 0,
+            ventaConImpuesto: item.totalWithTax || item.total || 0,
+            categoria: category.name || 'OTROS'
+          });
+        }
+      }
+    }
+
+    return products;
+  }
+
+  /**
+   * Prueba la conexion con la API de Toteat
+   * @returns {Promise<Object>}
    */
   async testConnection() {
-    // Si está en modo local, verificar que el archivo existe
-    if (this.useLocalFile) {
-      logger.info('Modo local activado - verificando archivo de datos');
-      try {
-        this.loadFromLocalFile();
-        return {
-          connected: true,
-          mode: 'local',
-          message: 'Modo local activo - datos cargados desde archivo',
-          timestamp: new Date().toISOString()
-        };
-      } catch (error) {
-        return {
-          connected: false,
-          mode: 'local',
-          message: error.message,
-          timestamp: new Date().toISOString()
-        };
-      }
-    }
-
     try {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const formattedDate = yesterday.toISOString().split('T')[0].replace(/-/g, '');
+      // Usar fecha de ayer para prueba
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
 
-      logger.info(`Probando conexión con Toteat`);
-      logger.info(`URL: ${this.apiUrl}/collection?xir=${this.restaurantId}&xil=${this.localId}&xiu=${this.userId}&date=${formattedDate}`);
-
-      const response = await this.client.get('/collection', {
-        params: {
-          xir: this.restaurantId,
-          xil: this.localId,
-          xiu: this.userId,
-          xapitoken: this.apiKey,
-          date: formattedDate
-        }
-      });
-
-      logger.info('Respuesta de Toteat:', response.data);
-
-      if (response.data && response.data.ok === true) {
-        return {
-          connected: true,
-          message: response.data.msg?.texto || 'Conexión exitosa con Toteat',
-          timestamp: new Date().toISOString()
-        };
-      } else {
-        return {
-          connected: false,
-          message: response.data?.msg?.texto || 'Respuesta inválida de Toteat',
-          responseData: response.data,
-          timestamp: new Date().toISOString()
-        };
-      }
-
+      const result = await this.getCollection(yesterday);
+      return {
+        connected: true,
+        message: result.message
+      };
     } catch (error) {
-      let errorMessage = error.message;
-      
-      if (error.response?.status === 404) {
-        errorMessage = `Endpoint no encontrado (404). Verifica la URL: ${this.apiUrl}/collection`;
-      } else if (error.response?.status === 401 || error.response?.status === 403) {
-        errorMessage = `Error de autenticación (${error.response.status}). Verifica los parámetros: xir, xil, xiu, xapitoken`;
-      } else if (error.code === 'ECONNREFUSED') {
-        errorMessage = `Conexión rechazada. ¿El servidor de Toteat está disponible? URL: ${this.apiUrl}`;
-      } else if (error.response?.data?.msg?.tipo === 7) {
-        errorMessage = `Token sin permisos (tipo 7). Contacta a Toteat para activar permisos de API.`;
-      }
-
-      logger.error('Error en testConnection:', {
-        message: errorMessage,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        responseData: error.response?.data,
-        url: this.apiUrl,
-        params: {
-          xir: this.restaurantId,
-          xil: this.localId,
-          xiu: this.userId
-        }
-      });
-
       return {
         connected: false,
-        message: errorMessage,
-        timestamp: new Date().toISOString()
+        error: error.message
       };
     }
-  }
-
-  /**
-   * Formatea una fecha a formato YYYY-MM-DD
-   * @param {Date} date - Fecha a formatear
-   * @returns {string} - Fecha formateada
-   */
-  formatDate(date) {
-    return date.toISOString().split('T')[0];
-  }
-
-  /**
-   * Valida que las credenciales estén configuradas
-   * @returns {boolean}
-   */
-  validateCredentials() {
-    if (!this.apiKey || !this.localId) {
-      logger.error('Credenciales de Toteat no configuradas');
-      return false;
-    }
-    return true;
   }
 }
 

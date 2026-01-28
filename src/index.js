@@ -1,13 +1,11 @@
 const express = require('express');
-const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const XLSX = require('xlsx');
 const config = require('./config/config');
 const logger = require('./utils/logger');
-const syncService = require('./services/sync.service');
 const toteatService = require('./services/toteat.service');
-const collectionParser = require('./services/collection-parser.service');
 
 // Configurar multer para subida de archivos
 const storage = multer.diskStorage({
@@ -30,7 +28,7 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir);
 }
 
-// Crear aplicación Express
+// Crear aplicacion Express
 const app = express();
 app.use(express.json());
 
@@ -38,67 +36,12 @@ app.use(express.json());
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'Toteat API Sync',
+    service: 'Toteat CSV Processor',
     timestamp: new Date().toISOString()
   });
 });
 
-// Status endpoint
-app.get('/api/status', (req, res) => {
-  const status = syncService.getStatus();
-  res.json(status);
-});
-
-// Test connections endpoint
-app.get('/api/test-connections', async (req, res) => {
-  try {
-    const result = await syncService.testConnections();
-    res.json(result);
-  } catch (error) {
-    logger.error('Error en test de conexión:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Manual sync endpoint - obtener datos de Toteat
-app.post('/api/sync', async (req, res) => {
-  try {
-    logger.info('Obteniendo datos de collection de Toteat');
-    const { date } = req.body;
-    const syncDate = date ? new Date(date) : null;
-    
-    const result = await syncService.getDailySalesFromToteat(syncDate);
-    res.json(result);
-  } catch (error) {
-    logger.error('Error obteniendo datos:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Get Toteat sales collection
-app.get('/api/toteat/sales', async (req, res) => {
-  try {
-    const { date } = req.query;
-    const salesDate = date ? new Date(date) : null;
-    
-    const result = await syncService.getDailySalesFromToteat(salesDate);
-    res.json(result);
-  } catch (error) {
-    logger.error('Error obteniendo collection:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Página HTML para subir CSV de ventas Toteat
+// Pagina HTML para procesar ventas Toteat
 app.get('/upload', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -106,18 +49,22 @@ app.get('/upload', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Procesar CSV Ventas - Toteat</title>
+      <title>Ventas Toteat - Domani</title>
       <style>
         body { font-family: Arial, sans-serif; max-width: 1200px; margin: 30px auto; padding: 20px; background: #f0f0f0; }
         h1 { color: #2e7d32; }
-        .upload-form { background: white; padding: 30px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h2 { color: #1976D2; margin-top: 0; }
+        .section { background: white; padding: 25px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .form-group { margin: 15px 0; }
         label { display: block; margin-bottom: 5px; font-weight: bold; }
         input[type="text"], input[type="date"] { padding: 10px; width: 250px; border: 1px solid #ddd; border-radius: 5px; }
         input[type="file"] { margin: 15px 0; padding: 10px; }
-        button { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; }
-        button:hover { background: #45a049; }
-        .btn-download { background: #2196F3; }
+        button { padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; margin-top: 10px; }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-primary:hover { background: #45a049; }
+        .btn-api { background: #FF5722; color: white; }
+        .btn-api:hover { background: #E64A19; }
+        .btn-download { background: #2196F3; color: white; }
         .btn-download:hover { background: #1976D2; }
         #result { margin-top: 20px; padding: 20px; background: white; border-radius: 10px; display: none; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px; }
@@ -126,36 +73,67 @@ app.get('/upload', (req, res) => {
         tr:nth-child(even) { background: #f9f9f9; }
         .header-info { background: #e8f5e9; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
         .header-info p { margin: 5px 0; }
-        .total-row { font-weight: bold; background: #c8e6c9 !important; }
         .error { color: red; }
         .loading { color: #666; font-style: italic; }
         .info-box { background: #fff3e0; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #ff9800; }
+        .info-api { background: #ffebee; border-left-color: #f44336; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #ddd; border-radius: 5px 5px 0 0; cursor: pointer; }
+        .tab.active { background: white; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
       </style>
     </head>
     <body>
-      <h1>Procesar CSV de Ventas Toteat</h1>
+      <h1>Ventas Toteat - Domani</h1>
 
-      <div class="upload-form">
-        <div class="info-box">
-          <strong>Formato esperado:</strong> CSV con columnas ID, Producto, Cantidad, Valor Venta, Descuentos, Costo
+      <div class="section">
+        <div class="tabs">
+          <div class="tab active" onclick="showTab('csv')">Subir CSV</div>
+          <div class="tab" onclick="showTab('api')">API Toteat</div>
         </div>
 
-        <div class="form-group">
-          <label>Nombre del Local:</label>
-          <input type="text" id="locationName" value="Domani Providencia" placeholder="Ej: Domani Granaderos">
+        <!-- Tab CSV -->
+        <div id="tab-csv" class="tab-content active">
+          <h2>Procesar CSV de Ventas</h2>
+          <div class="info-box">
+            <strong>Formato esperado:</strong> CSV exportado de Toteat con columnas: Elemento de Menu, Codigo, Cantidad, Ingresos Excl. IVA, etc.
+          </div>
+
+          <div class="form-group">
+            <label>Nombre del Local:</label>
+            <input type="text" id="locationName" value="Domani Providencia">
+          </div>
+
+          <div class="form-group">
+            <label>Fecha del Reporte:</label>
+            <input type="date" id="reportDate" value="${new Date().toISOString().split('T')[0]}">
+          </div>
+
+          <div class="form-group">
+            <label>Archivo CSV:</label>
+            <input type="file" id="csvFile" accept=".csv">
+          </div>
+
+          <button class="btn-primary" onclick="uploadCSV()">Procesar CSV</button>
         </div>
 
-        <div class="form-group">
-          <label>Fecha del Reporte:</label>
-          <input type="date" id="reportDate" value="${new Date().toISOString().split('T')[0]}">
+        <!-- Tab API -->
+        <div id="tab-api" class="tab-content">
+          <h2>Obtener desde API Toteat</h2>
+          <div class="info-box info-api">
+            <strong>Nota:</strong> La API de Toteat tiene limite de 1 solicitud por minuto. Los datos vienen agrupados por turnos.
+          </div>
+
+          <div class="form-group">
+            <label>Fecha a consultar:</label>
+            <input type="date" id="apiDate" value="${new Date().toISOString().split('T')[0]}">
+          </div>
+
+          <button class="btn-api" onclick="fetchFromAPI()">Obtener de API Toteat</button>
+          <button class="btn-primary" onclick="testAPI()">Probar Conexion</button>
         </div>
 
-        <div class="form-group">
-          <label>Archivo CSV:</label>
-          <input type="file" id="csvFile" accept=".csv">
-        </div>
-
-        <button onclick="uploadCSV()">Procesar CSV</button>
         <button class="btn-download" onclick="downloadExcel()" id="btnDownload" style="display:none;">Descargar Excel</button>
       </div>
 
@@ -163,6 +141,47 @@ app.get('/upload', (req, res) => {
 
       <script>
         let lastResult = null;
+
+        function showTab(tab) {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+          document.querySelector('.tab:nth-child(' + (tab === 'csv' ? '1' : '2') + ')').classList.add('active');
+          document.getElementById('tab-' + tab).classList.add('active');
+        }
+
+        async function testAPI() {
+          const resultDiv = document.getElementById('result');
+          resultDiv.style.display = 'block';
+          resultDiv.innerHTML = '<p class="loading">Probando conexion con Toteat...</p>';
+
+          try {
+            const response = await fetch('/api/toteat/test');
+            const data = await response.json();
+            if (data.connected) {
+              resultDiv.innerHTML = '<p style="color:green;font-weight:bold;">Conexion exitosa con API Toteat</p>';
+            } else {
+              resultDiv.innerHTML = '<p class="error">Error: ' + (data.error || 'No se pudo conectar') + '</p>';
+            }
+          } catch (error) {
+            resultDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+          }
+        }
+
+        async function fetchFromAPI() {
+          const resultDiv = document.getElementById('result');
+          const apiDate = document.getElementById('apiDate').value;
+
+          resultDiv.style.display = 'block';
+          resultDiv.innerHTML = '<p class="loading">Obteniendo datos de Toteat... (puede tardar unos segundos)</p>';
+
+          try {
+            const response = await fetch('/api/toteat/ventas?date=' + apiDate);
+            const data = await response.json();
+            displayResult(data);
+          } catch (error) {
+            resultDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+          }
+        }
 
         async function uploadCSV() {
           const fileInput = document.getElementById('csvFile');
@@ -184,73 +203,70 @@ app.get('/upload', (req, res) => {
           formData.append('reportDate', reportDate);
 
           try {
-            const response = await fetch('/api/process-sales-csv', {
-              method: 'POST',
-              body: formData
-            });
+            const response = await fetch('/api/process-sales-csv', { method: 'POST', body: formData });
             const data = await response.json();
-
-            if (data.success) {
-              lastResult = data;
-              document.getElementById('btnDownload').style.display = 'inline-block';
-
-              let html = '<div class="header-info">';
-              html += '<p><strong>Location name:</strong> ' + data.header.locationName + '</p>';
-              html += '<p><strong>Begin date:</strong> ' + data.header.beginDate + '</p>';
-              html += '<p><strong>End date:</strong> ' + data.header.endDate + '</p>';
-              html += '<p><strong>Total revenue excl. tax:</strong> $' + data.header.totalRevenueExclTax.toLocaleString() + '</p>';
-              html += '<p><strong>Ingresos totales inc. impuesto:</strong> $' + data.header.totalRevenueInclTax.toLocaleString() + '</p>';
-              html += '</div>';
-
-              html += '<table>';
-              html += '<tr><th>ELEMENTO DE MENÚ</th><th>Menu item code</th><th>Menu item list price</th><th>Quantity sold</th><th>Sales total excl. tax</th><th>Ventas totales inc. impuesto</th><th>Categoría</th></tr>';
-
-              data.items.forEach(item => {
-                html += '<tr>';
-                html += '<td>' + item.producto + '</td>';
-                html += '<td>' + item.codigo + '</td>';
-                html += '<td>$' + item.precioUnitario.toLocaleString() + '</td>';
-                html += '<td>' + item.cantidad + '</td>';
-                html += '<td>$' + item.ventaSinImpuesto.toLocaleString() + '</td>';
-                html += '<td>$' + item.ventaConImpuesto.toLocaleString() + '</td>';
-                html += '<td>' + item.categoria + '</td>';
-                html += '</tr>';
-              });
-
-              html += '</table>';
-              html += '<p><strong>Total productos:</strong> ' + data.items.length + '</p>';
-
-              resultDiv.innerHTML = html;
-            } else {
-              resultDiv.innerHTML = '<p class="error">Error: ' + data.error + '</p>';
-            }
+            displayResult(data);
           } catch (error) {
             resultDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
           }
         }
 
-        function downloadExcel() {
+        function displayResult(data) {
+          const resultDiv = document.getElementById('result');
+          if (data.success) {
+            lastResult = data;
+            document.getElementById('btnDownload').style.display = 'inline-block';
+
+            let html = '<div class="header-info">';
+            html += '<p><strong>Location name:</strong> ' + data.header.locationName + '</p>';
+            html += '<p><strong>Fecha:</strong> ' + data.header.beginDate + '</p>';
+            html += '<p><strong>Total sin impuesto:</strong> $' + data.header.totalRevenueExclTax.toLocaleString() + '</p>';
+            html += '<p><strong>Total con impuesto:</strong> $' + data.header.totalRevenueInclTax.toLocaleString() + '</p>';
+            html += '</div>';
+
+            if (data.items && data.items.length > 0) {
+              html += '<table>';
+              html += '<tr><th>Producto</th><th>Codigo</th><th>Precio Unit.</th><th>Cantidad</th><th>Venta sin IVA</th><th>Venta con IVA</th><th>Categoria</th></tr>';
+              data.items.forEach(item => {
+                html += '<tr>';
+                html += '<td>' + item.producto + '</td>';
+                html += '<td>' + item.codigo + '</td>';
+                html += '<td>$' + (item.precioUnitario || 0).toLocaleString() + '</td>';
+                html += '<td>' + item.cantidad + '</td>';
+                html += '<td>$' + (item.ventaSinImpuesto || 0).toLocaleString() + '</td>';
+                html += '<td>$' + (item.ventaConImpuesto || 0).toLocaleString() + '</td>';
+                html += '<td>' + item.categoria + '</td>';
+                html += '</tr>';
+              });
+              html += '</table>';
+              html += '<p><strong>Total productos:</strong> ' + data.items.length + '</p>';
+            } else {
+              html += '<p>No se encontraron items detallados. Los totales vienen de la API.</p>';
+            }
+
+            resultDiv.innerHTML = html;
+          } else {
+            resultDiv.innerHTML = '<p class="error">Error: ' + data.error + '</p>';
+          }
+        }
+
+        async function downloadExcel() {
           if (!lastResult) return;
-
-          // Crear CSV para Excel
-          let csv = 'Location name,' + lastResult.header.locationName + '\\n';
-          csv += 'Begin date,' + lastResult.header.beginDate + '\\n';
-          csv += 'End date,' + lastResult.header.endDate + '\\n';
-          csv += 'Total revenue excl. tax,' + lastResult.header.totalRevenueExclTax + '\\n';
-          csv += 'Ingresos totales inc. impuesto,' + lastResult.header.totalRevenueInclTax + '\\n';
-          csv += '\\n';
-          csv += 'ELEMENTO DE MENÚ,Menu item code,Menu item list price,Quantity sold,Sales total excl. tax,Ventas totales inc. impuesto,Categoría\\n';
-
-          lastResult.items.forEach(item => {
-            csv += '"' + item.producto + '",' + item.codigo + ',' + item.precioUnitario + ',' + item.cantidad + ',' + item.ventaSinImpuesto + ',' + item.ventaConImpuesto + ',"' + item.categoria + '"\\n';
-          });
-
-          // Descargar
-          const blob = new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(blob);
-          link.download = 'resumen_ventas_' + lastResult.header.beginDate + '.csv';
-          link.click();
+          try {
+            const response = await fetch('/api/generate-excel', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ header: lastResult.header, items: lastResult.items })
+            });
+            if (!response.ok) throw new Error('Error generando Excel');
+            const blob = await response.blob();
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'ventas_' + lastResult.header.beginDate + '.xlsx';
+            link.click();
+          } catch (error) {
+            alert('Error descargando Excel: ' + error.message);
+          }
         }
       </script>
     </body>
@@ -258,11 +274,11 @@ app.get('/upload', (req, res) => {
   `);
 });
 
-// Endpoint para procesar CSV de ventas Toteat (formato: ID, Producto, Cantidad, Valor Venta, Descuentos, Costo)
+// Endpoint para procesar CSV de ventas Toteat
 app.post('/api/process-sales-csv', upload.single('csv'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No se recibió archivo' });
+      return res.status(400).json({ success: false, error: 'No se recibio archivo' });
     }
 
     const locationName = req.body.locationName || 'Sin nombre';
@@ -272,96 +288,45 @@ app.post('/api/process-sales-csv', upload.single('csv'), async (req, res) => {
 
     // Leer y parsear el CSV
     let csvContent = fs.readFileSync(req.file.path, 'utf8');
-    // Remover BOM si existe
-    csvContent = csvContent.replace(/^\uFEFF/, '');
+    csvContent = csvContent.replace(/^\uFEFF/, ''); // Remover BOM
 
     const lines = csvContent.split('\n').filter(line => line.trim());
 
     if (lines.length < 2) {
-      return res.status(400).json({ success: false, error: 'El CSV está vacío o no tiene datos' });
+      return res.status(400).json({ success: false, error: 'El CSV esta vacio o no tiene datos' });
     }
 
     // Parsear encabezados
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
 
-    // Detectar columnas
-    const idIdx = headers.findIndex(h => h === 'id' || h.includes('codigo') || h.includes('code'));
-    const productoIdx = headers.findIndex(h => h.includes('producto') || h.includes('product') || h.includes('nombre'));
+    // Detectar columnas (compatible con formato Toteat)
+    const idIdx = headers.findIndex(h => h.includes('codigo') || h.includes('código') || h === 'id' || h.includes('pos'));
+    const productoIdx = headers.findIndex(h => h.includes('elemento') || h.includes('producto') || h.includes('menu') || h.includes('menú'));
     const cantidadIdx = headers.findIndex(h => h.includes('cantidad') || h.includes('quantity') || h.includes('qty'));
-    const valorVentaIdx = headers.findIndex(h => h.includes('valor venta') || h.includes('venta') || h.includes('sales') || h.includes('total'));
-    const descuentosIdx = headers.findIndex(h => h.includes('descuento') || h.includes('discount'));
-    const costoIdx = headers.findIndex(h => h.includes('costo') || h.includes('cost'));
+    const ventaExclIdx = headers.findIndex(h => h.includes('excl') || h.includes('sin iva') || h.includes('valor venta'));
+    const ventaInclIdx = headers.findIndex(h => h.includes('incl') || h.includes('con iva') || h.includes('renta'));
 
     const items = [];
     let totalSinImpuesto = 0;
     let totalConImpuesto = 0;
 
-    // Procesar cada línea
+    // Procesar cada linea
     for (let i = 1; i < lines.length; i++) {
-      // Parsear considerando comas dentro de comillas
-      const values = [];
-      let current = '';
-      let inQuotes = false;
-
-      for (const char of lines[i]) {
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          values.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      values.push(current.trim());
-
+      const values = parseCSVLine(lines[i]);
       if (values.length < 4) continue;
 
       const id = values[idIdx] || '';
       const producto = values[productoIdx]?.replace(/"/g, '') || '';
       const cantidad = parseInt(values[cantidadIdx]?.replace(/[^0-9-]/g, '') || '0');
-      const valorVenta = parseFloat(values[valorVentaIdx]?.replace(/[^0-9.-]/g, '').replace(',', '.') || '0');
-      const descuentos = parseFloat(values[descuentosIdx]?.replace(/[^0-9.-]/g, '').replace(',', '.') || '0');
-      const costo = parseFloat(values[costoIdx]?.replace(/[^0-9.-]/g, '').replace(',', '.') || '0');
 
-      // Calcular precio unitario (valor venta / cantidad)
-      const precioUnitario = cantidad > 0 ? Math.round(valorVenta / cantidad) : 0;
+      // Parsear montos (formato chileno: punto separador miles, coma decimal)
+      const ventaSinImpuesto = parseMontoChileno(values[ventaExclIdx]);
+      const ventaConImpuesto = ventaInclIdx >= 0 ? parseMontoChileno(values[ventaInclIdx]) : Math.round(ventaSinImpuesto * 1.19);
 
-      // Calcular venta con impuesto (19% IVA Chile)
-      const ventaConImpuesto = Math.round(valorVenta * 1.19);
+      const precioUnitario = cantidad > 0 ? Math.round(ventaSinImpuesto / cantidad) : 0;
+      const categoria = inferirCategoria(producto);
 
-      // Inferir categoría basada en el nombre del producto
-      let categoria = 'General';
-      const nombreLower = producto.toLowerCase();
-      if (nombreLower.includes('pizza') || nombreLower.includes('margherita') || nombreLower.includes('pepperoni') || nombreLower.includes('caprichosisima') || nombreLower.includes('tartufo') || nombreLower.includes('marinara') || nombreLower.includes('putanesca') || nombreLower.includes('fonduta') || nombreLower.includes('brisket') || nombreLower.includes('gambere') || nombreLower.includes('rucula') || nombreLower.includes('rúcula')) {
-        categoria = 'Pizzas';
-      } else if (nombreLower.includes('birra') || nombreLower.includes('cerveza') || nombreLower.includes('schop') || nombreLower.includes('stella') || nombreLower.includes('peroni') || nombreLower.includes('leyenda') || nombreLower.includes('estrella')) {
-        categoria = 'Cervezas';
-      } else if (nombreLower.includes('coca') || nombreLower.includes('fanta') || nombreLower.includes('ginger') || nombreLower.includes('tonica') || nombreLower.includes('gaseosa') || nombreLower.includes('agua') || nombreLower.includes('vital')) {
-        categoria = 'Bebidas';
-      } else if (nombreLower.includes('spritz') || nombreLower.includes('negroni') || nombreLower.includes('aperol') || nombreLower.includes('campari') || nombreLower.includes('sangria') || nombreLower.includes('sangría') || nombreLower.includes('frozen') || nombreLower.includes('gin') || nombreLower.includes('pisco') || nombreLower.includes('fernet') || nombreLower.includes('jack') || nombreLower.includes('disaronno') || nombreLower.includes('limoncello') || nombreLower.includes('chambord') || nombreLower.includes('mocktail')) {
-        categoria = 'Cócteles';
-      } else if (nombreLower.includes('jugo') || nombreLower.includes('limonada')) {
-        categoria = 'Jugos';
-      } else if (nombreLower.includes('insalata') || nombreLower.includes('ensalada')) {
-        categoria = 'Ensaladas';
-      } else if (nombreLower.includes('gnocchi') || nombreLower.includes('ñoquis') || nombreLower.includes('ñoqui')) {
-        categoria = 'Pastas';
-      } else if (nombreLower.includes('gelato') || nombreLower.includes('tiramisú') || nombreLower.includes('tiramisu') || nombreLower.includes('affogato')) {
-        categoria = 'Postres';
-      } else if (nombreLower.includes('espresso') || nombreLower.includes('americano') || nombreLower.includes('capuccino') || nombreLower.includes('cafe') || nombreLower.includes('café') || nombreLower.includes('te ') || nombreLower.includes('infusion')) {
-        categoria = 'Cafetería';
-      } else if (nombreLower.includes('panetti') || nombreLower.includes('panecillo') || nombreLower.includes('tavola') || nombreLower.includes('provolone') || nombreLower.includes('burrata') || nombreLower.includes('carpaccio') || nombreLower.includes('croccantina')) {
-        categoria = 'Entradas';
-      } else if (nombreLower.includes('extra') || nombreLower.includes('aderezo') || nombreLower.includes('dip') || nombreLower.includes('agr.')) {
-        categoria = 'Extras';
-      } else if (nombreLower.includes('colacion')) {
-        categoria = 'Colaciones';
-      } else if (nombreLower.includes('combo') || nombreLower.includes('felice') || nombreLower.includes('promo')) {
-        categoria = 'Promociones';
-      }
-
-      totalSinImpuesto += valorVenta;
+      totalSinImpuesto += ventaSinImpuesto;
       totalConImpuesto += ventaConImpuesto;
 
       items.push({
@@ -369,7 +334,7 @@ app.post('/api/process-sales-csv', upload.single('csv'), async (req, res) => {
         codigo: id,
         precioUnitario,
         cantidad,
-        ventaSinImpuesto: valorVenta,
+        ventaSinImpuesto,
         ventaConImpuesto,
         categoria
       });
@@ -396,168 +361,325 @@ app.post('/api/process-sales-csv', upload.single('csv'), async (req, res) => {
   }
 });
 
-// Endpoint para subir y procesar CSV
-app.post('/api/upload-csv', upload.single('csv'), async (req, res) => {
+// Endpoint para obtener recaudacion desde API Toteat
+app.get('/api/toteat/ventas', async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No se recibió archivo' });
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    logger.info(`Obteniendo recaudacion de Toteat para: ${targetDate}`);
+
+    const result = await toteatService.getCollection(targetDate);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.message });
     }
 
-    logger.info(`Procesando CSV: ${req.file.filename}`);
+    const collectionData = result.data;
+    const items = [];
+    let totalRecaudacion = 0;
 
-    // Leer y parsear el CSV
-    const csvContent = fs.readFileSync(req.file.path, 'utf8');
-    const lines = csvContent.split('\n').filter(line => line.trim());
-
-    if (lines.length < 2) {
-      return res.status(400).json({ success: false, error: 'El CSV está vacío o no tiene datos' });
-    }
-
-    // Parsear encabezados y datos
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
-    const records = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
-      const record = {};
-      headers.forEach((header, index) => {
-        record[header] = values[index] || '';
-      });
-      records.push(record);
-    }
-
-    // Calcular resumen
-    const summary = {
-      totalRecords: records.length,
-      grandTotal: 0,
-      byPaymentMethod: {},
-      byShift: {},
-      byCaja: {}
+    // Helper para convertir objeto o array a array iterable
+    const toArray = (data) => {
+      if (!data) return [];
+      if (Array.isArray(data)) return data;
+      if (typeof data === 'object') return Object.values(data);
+      return [];
     };
 
-    // Buscar columnas (flexible)
-    const montoKey = headers.find(h => h.includes('monto') || h.includes('amount') || h.includes('total'));
-    const metodoKey = headers.find(h => h.includes('método') || h.includes('metodo') || h.includes('pago') || h.includes('payment'));
-    const turnoKey = headers.find(h => h.includes('turno') || h.includes('shift'));
-    const cajaKey = headers.find(h => h.includes('caja') || h.includes('register'));
+    // Helper para parsear montos (pueden venir como string con coma)
+    const parseAmount = (amount) => {
+      if (typeof amount === 'number') return amount;
+      if (typeof amount === 'string') {
+        return parseFloat(amount.replace(/,/g, '').replace(/[^0-9.-]/g, '')) || 0;
+      }
+      return 0;
+    };
 
-    records.forEach(record => {
-      const monto = parseFloat(record[montoKey]?.replace(/[^0-9.-]/g, '') || 0);
-      const metodo = record[metodoKey] || 'Sin especificar';
-      const turno = record[turnoKey] || 'Sin turno';
-      const caja = record[cajaKey] || 'Sin caja';
+    // Procesar turnos
+    const shiftsObj = collectionData?.shifts || {};
+    const shiftKeys = Object.keys(shiftsObj);
 
-      summary.grandTotal += monto;
+    for (const shiftKey of shiftKeys) {
+      const shift = shiftsObj[shiftKey];
+      const shiftName = shift.name || `Turno ${shiftKey}`;
 
-      if (!summary.byPaymentMethod[metodo]) summary.byPaymentMethod[metodo] = 0;
-      summary.byPaymentMethod[metodo] += monto;
+      // Procesar registros/cajas de cada turno
+      const registersObj = shift.registers || {};
+      const registerKeys = Object.keys(registersObj);
 
-      if (!summary.byShift[turno]) summary.byShift[turno] = 0;
-      summary.byShift[turno] += monto;
+      for (const regKey of registerKeys) {
+        const registerArray = toArray(registersObj[regKey]);
 
-      if (!summary.byCaja[caja]) summary.byCaja[caja] = 0;
-      summary.byCaja[caja] += monto;
+        for (const caja of registerArray) {
+          const cajaName = caja.registerName || caja.resgisterName || `Caja ${regKey}`;
+          const finalAmount = parseAmount(caja.finalAmount) || 0;
+          const initialAmount = parseAmount(caja.initialAmount) || 0;
+          const closedBy = caja.closedCashier || 'N/A';
+          const closedDate = caja.closedDate || '';
+
+          // Procesar metodos de pago
+          const paymentMethods = toArray(caja.paymentMethods);
+
+          if (paymentMethods.length > 0) {
+            // Si hay metodos de pago, procesarlos
+            for (const pm of paymentMethods) {
+              const amount = parseAmount(pm.amount);
+              const methodName = (pm.paymentMethod || 'Otro').replace(/,$/g, '').trim();
+
+              totalRecaudacion += amount;
+
+              items.push({
+                producto: methodName,
+                codigo: pm.paymentMethodID || '',
+                precioUnitario: 0,
+                cantidad: 1,
+                ventaSinImpuesto: Math.round(amount / 1.19),
+                ventaConImpuesto: Math.round(amount),
+                categoria: `${shiftName} - ${cajaName}`
+              });
+            }
+          } else if (finalAmount > 0) {
+            // Si no hay metodos pero hay finalAmount, usarlo
+            totalRecaudacion += finalAmount;
+            items.push({
+              producto: `Cierre de caja (${closedBy})`,
+              codigo: closedDate ? closedDate.split('T')[0] : '',
+              precioUnitario: 0,
+              cantidad: 1,
+              ventaSinImpuesto: Math.round(finalAmount / 1.19),
+              ventaConImpuesto: Math.round(finalAmount),
+              categoria: `${shiftName} - ${cajaName}`
+            });
+          } else {
+            // Registrar la caja aunque no tenga montos (para ver la info)
+            items.push({
+              producto: `Caja cerrada por: ${closedBy}`,
+              codigo: closedDate ? closedDate.split('T')[1]?.split('.')[0] || '' : '',
+              precioUnitario: initialAmount,
+              cantidad: 0,
+              ventaSinImpuesto: finalAmount,
+              ventaConImpuesto: finalAmount,
+              categoria: `${shiftName} - ${cajaName}`
+            });
+          }
+        }
+      }
+    }
+
+    const hasData = items.length > 0;
+
+    res.json({
+      success: true,
+      header: {
+        locationName: 'Domani (API Toteat)',
+        beginDate: targetDate,
+        endDate: targetDate,
+        totalRevenueExclTax: Math.round(totalRecaudacion / 1.19),
+        totalRevenueInclTax: Math.round(totalRecaudacion)
+      },
+      items,
+      hasData,
+      rawData: collectionData
     });
 
-    // Formatear resultado
-    const result = {
-      success: true,
-      summary: {
-        totalRecords: summary.totalRecords,
-        grandTotal: summary.grandTotal,
-        byPaymentMethod: Object.entries(summary.byPaymentMethod).map(([method, total]) => ({
-          method,
-          total,
-          percentage: ((total / summary.grandTotal) * 100).toFixed(2) + '%'
-        })).sort((a, b) => b.total - a.total),
-        byShift: Object.entries(summary.byShift).map(([shift, total]) => ({
-          shift,
-          total
-        })),
-        byCaja: Object.entries(summary.byCaja).map(([caja, total]) => ({
-          caja,
-          total
-        }))
-      }
-    };
-
-    // Eliminar archivo temporal
-    fs.unlinkSync(req.file.path);
-
-    res.json(result);
-
   } catch (error) {
-    logger.error('Error procesando CSV:', error);
+    logger.error('Error obteniendo recaudacion de Toteat:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Export to CSV
-app.get('/api/toteat/sales/csv', async (req, res) => {
+// Test conexion Toteat
+app.get('/api/toteat/test', async (req, res) => {
   try {
-    const { date } = req.query;
-    const salesDate = date ? new Date(date) : null;
-    const dateStr = date || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    logger.info(`Exportando collection a CSV para ${dateStr}`);
-    
-    const collectionData = await toteatService.getDailySalesReport(salesDate);
-    const parsedCollection = collectionParser.parseCollection(collectionData, dateStr);
-    const csvString = collectionParser.exportToCSV(parsedCollection);
-
-    // Configurar headers para descarga
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="collection-${dateStr}.csv"`);
-    res.send('\uFEFF' + csvString); // BOM para Excel
-
+    const result = await toteatService.testConnection();
+    res.json(result);
   } catch (error) {
-    logger.error('Error exportando a CSV:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
+    res.status(500).json({ connected: false, error: error.message });
+  }
+});
+
+// Endpoint para generar Excel con resumen por categorias
+app.post('/api/generate-excel', (req, res) => {
+  try {
+    const { header, items } = req.body;
+
+    if (!header || !items) {
+      return res.status(400).json({ success: false, error: 'Datos incompletos' });
+    }
+
+    // Agrupar por categoria
+    const categorias = {};
+    items.forEach(item => {
+      if (!categorias[item.categoria]) {
+        categorias[item.categoria] = { exclTax: 0, inclTax: 0 };
+      }
+      categorias[item.categoria].exclTax += item.ventaSinImpuesto;
+      categorias[item.categoria].inclTax += item.ventaConImpuesto;
     });
+
+    // Ordenar por monto descendente
+    const categoriasOrdenadas = Object.entries(categorias)
+      .sort((a, b) => b[1].inclTax - a[1].inclTax);
+
+    // Funcion para formatear monto con peso chileno
+    const formatPeso = (num) => '$ ' + num.toLocaleString('es-CL');
+
+    // Crear datos para Excel
+    const data = [
+      ['Ventas totales :', formatPeso(header.totalRevenueExclTax)],
+      ['Total ventas con impuesto. :', formatPeso(header.totalRevenueInclTax)],
+      [],
+      ['Ventas por categoria'],
+      [],
+      ['CATEGORIA', 'EXL TOTAL. IMPUESTO', 'TOTAL INCL. IMPUESTO']
+    ];
+
+    categoriasOrdenadas.forEach(([categoria, totales]) => {
+      data.push([categoria, formatPeso(totales.exclTax), formatPeso(totales.inclTax)]);
+    });
+
+    // Fila de totales
+    data.push(['', formatPeso(header.totalRevenueExclTax), formatPeso(header.totalRevenueInclTax)]);
+
+    // Crear workbook y worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(data);
+
+    // Ajustar ancho de columnas
+    ws['!cols'] = [
+      { wch: 35 },
+      { wch: 20 },
+      { wch: 20 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Ventas por Categoria');
+
+    // Generar buffer
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    // Enviar archivo
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="ventas_${header.beginDate}.xlsx"`);
+    res.send(buffer);
+
+  } catch (error) {
+    logger.error('Error generando Excel:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Configurar tarea programada (cron job) - Obtener datos de Toteat diariamente
-const scheduledTask = cron.schedule(config.cron.schedule, async () => {
-  try {
-    logger.info('Ejecutando obtención de datos programada');
-    await syncService.getDailySalesFromToteat();
-    logger.info('Obtención de datos completada');
-  } catch (error) {
-    logger.error('Error en obtención de datos programada:', error);
+// Funcion para parsear linea CSV considerando comillas
+function parseCSVLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (const char of line) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
   }
-}, {
-  scheduled: true,
-  timezone: "America/Mexico_City"
-});
+  values.push(current.trim());
+  return values;
+}
+
+// Funcion para parsear monto en formato chileno ($ 1.234.567,00)
+function parseMontoChileno(valor) {
+  if (!valor) return 0;
+  // Remover $, espacios, y convertir formato chileno a numero
+  const limpio = valor.replace(/[$\s]/g, '').replace(/\./g, '').replace(',', '.');
+  return parseFloat(limpio) || 0;
+}
+
+// Funcion para inferir categoria basada en nombre del producto
+function inferirCategoria(producto) {
+  const nombreLower = producto.toLowerCase();
+
+  // AGREGADO - productos extras, aderezos, agregados
+  if (nombreLower.includes('(*extra)') || nombreLower.includes('*extra') || nombreLower.includes('aderezo') || nombreLower.includes('agr.') || nombreLower.includes('dip') || nombreLower.includes('de regalo')) {
+    return 'AGREGADO';
+  }
+  // PIZZAS
+  if (nombreLower.includes('pizza') || nombreLower.includes('margherita') || nombreLower.includes('pepperoni') ||
+      nombreLower.includes('caprichosisima') || nombreLower.includes('tartufo') || nombreLower.includes('marinara') ||
+      nombreLower.includes('putanesca') || nombreLower.includes('fonduta') || nombreLower.includes('brisket') ||
+      nombreLower.includes('gamberetti') || nombreLower.includes('rucula') || nombreLower.includes('rúcula') ||
+      nombreLower.includes('bambino') || nombreLower.includes('kevin bacon') || nombreLower.includes('chilli honey') ||
+      nombreLower.includes('top domani') || nombreLower.includes('gloria') || nombreLower.includes('felice') ||
+      nombreLower.includes('duo felici') || nombreLower.includes('due felici')) {
+    return 'PIZZAS 🍕';
+  }
+  // ANTIPASTOS Y ENSALADAS
+  if (nombreLower.includes('insalata') || nombreLower.includes('ensalada') || nombreLower.includes('panetti') ||
+      nombreLower.includes('panecillo') || nombreLower.includes('tavola') || nombreLower.includes('provolone') ||
+      nombreLower.includes('burrata') || nombreLower.includes('carpaccio') || nombreLower.includes('croccantina') ||
+      nombreLower.includes('gnocchi') || nombreLower.includes('ñoqui')) {
+    return 'ANTIPASTOS Y ENSALADAS 🥗';
+  }
+  // CERVEZAS
+  if (nombreLower.includes('birra') || nombreLower.includes('cerveza') || nombreLower.includes('schop') ||
+      nombreLower.includes('stella') || nombreLower.includes('peroni') || nombreLower.includes('leyenda') ||
+      nombreLower.includes('estrella') || nombreLower.includes('chelada') || nombreLower.includes('michelada')) {
+    return 'CERVEZAS TODAS🍺';
+  }
+  // AGUAS JUGOS & BEBIDAS
+  if (nombreLower.includes('coca') || nombreLower.includes('fanta') || nombreLower.includes('ginger') ||
+      nombreLower.includes('tonica') || nombreLower.includes('gaseosa') || nombreLower.includes('agua') ||
+      nombreLower.includes('vital') || nombreLower.includes('pellegrino') || nombreLower.includes('panna') ||
+      nombreLower.includes('jugo') || nombreLower.includes('limonada')) {
+    return 'AGUAS JUGOS & BEBIDAS';
+  }
+  // SPRITZ & COCKTAILS
+  if (nombreLower.includes('spritz') || nombreLower.includes('negroni') || nombreLower.includes('aperol') ||
+      nombreLower.includes('campari') || nombreLower.includes('sangria') || nombreLower.includes('sangría') ||
+      nombreLower.includes('frozen') || nombreLower.includes('limoncello') || nombreLower.includes('chambord') ||
+      nombreLower.includes('mocktail') || nombreLower.includes('disaronno fizz')) {
+    return 'SPRITZ & COCKTAILS Y ACUERDATE';
+  }
+  // VINOS & ESPUMANTES
+  if (nombreLower.includes('vino') || nombreLower.includes('espumante') || nombreLower.includes('champagne') ||
+      nombreLower.includes('prosecco') || nombreLower.includes('wine')) {
+    return 'VINOS & ESPUMANTES';
+  }
+  // ESPIRITUOSAS Y DESTILADOS
+  if (nombreLower.includes('gin') || nombreLower.includes('pisco') || nombreLower.includes('fernet') ||
+      nombreLower.includes('jack') || nombreLower.includes('whisky') || nombreLower.includes('vodka') ||
+      nombreLower.includes('ron') || nombreLower.includes('tequila')) {
+    return 'ESPIRITUOSAS Y DESTILADOS';
+  }
+  // DOLCE
+  if (nombreLower.includes('gelato') || nombreLower.includes('tiramisú') || nombreLower.includes('tiramisu') ||
+      nombreLower.includes('affogato') || nombreLower.includes('dolce') || nombreLower.includes('postre')) {
+    return 'DOLCE 🍦';
+  }
+  // CAFETERIA
+  if (nombreLower.includes('espresso') || nombreLower.includes('americano') || nombreLower.includes('capuccino') ||
+      nombreLower.includes('cafe') || nombreLower.includes('café') || nombreLower.includes('lavazza') ||
+      nombreLower.includes('te ') || nombreLower.includes('infusion') || nombreLower.includes('dilmah')) {
+    return 'Cafeteria';
+  }
+  // DELIVERY
+  if (nombreLower.includes('delivery') || nombreLower.includes('despacho') || nombreLower.includes('colacion')) {
+    return 'DELIVERY';
+  }
+
+  return 'OTROS';
+}
 
 // Iniciar servidor
 const PORT = config.server.port;
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   logger.info(`Servidor iniciado en puerto ${PORT}`);
   logger.info(`Ambiente: ${config.server.env}`);
-  logger.info(`Cron schedule: ${config.cron.schedule}`);
-
-  // Probar conexiones al iniciar
-  logger.info('Iniciando prueba de conexiones');
-  try {
-    const connections = await syncService.testConnections();
-    if (connections.services?.toteat?.mode === 'local') {
-      logger.info('📁 Modo LOCAL activado - usando archivo de datos');
-      logger.info('Para usar la API real, cambia TOTEAT_USE_LOCAL_FILE=false en .env');
-    } else if (connections.success) {
-      logger.info('✅ Conexión con Toteat exitosa');
-    } else {
-      logger.warn('⚠️  Conexión con Toteat falló. Revisa las credenciales.');
-    }
-  } catch (error) {
-    logger.warn('⚠️  No se pudo probar la conexión al iniciar:', error.message);
-  }
-
-  logger.info('Servicio de extracción de datos Toteat listo');
+  logger.info('Servicio de procesamiento CSV Toteat listo');
+  logger.info(`Accede a http://localhost:${PORT}/upload para subir CSV`);
 });
 
 // Manejo de errores no capturados
@@ -568,19 +690,6 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught Exception:', error);
   process.exit(1);
-});
-
-// Manejo de señales de terminación
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM recibido. Cerrando aplicación...');
-  scheduledTask.stop();
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  logger.info('SIGINT recibido. Cerrando aplicación...');
-  scheduledTask.stop();
-  process.exit(0);
 });
 
 module.exports = app;
