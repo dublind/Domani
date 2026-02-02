@@ -6,6 +6,8 @@ const XLSX = require('xlsx');
 const config = require('./config/config');
 const logger = require('./utils/logger');
 const toteatService = require('./services/toteat.service');
+const schedulerService = require('./services/scheduler.service');
+const emailService = require('./services/email.service');
 
 // Configurar multer para subida de archivos
 const storage = multer.diskStorage({
@@ -361,111 +363,40 @@ app.post('/api/process-sales-csv', upload.single('csv'), async (req, res) => {
   }
 });
 
-// Endpoint para obtener recaudacion desde API Toteat
+// Endpoint para obtener ventas desde API Toteat (usa /sales con ini/end)
 app.get('/api/toteat/ventas', async (req, res) => {
   try {
     const { date } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
 
-    logger.info(`Obteniendo recaudacion de Toteat para: ${targetDate}`);
+    logger.info(`Obteniendo ventas de Toteat para: ${targetDate}`);
 
-    const result = await toteatService.getCollection(targetDate);
+    const result = await toteatService.getSales(targetDate);
 
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.message });
     }
 
-    const collectionData = result.data;
-    const items = [];
-    let totalRecaudacion = 0;
+    // Parsear ventas a productos
+    const items = toteatService.parseSalesToProducts(result.data);
 
-    // Helper para convertir objeto o array a array iterable
-    const toArray = (data) => {
-      if (!data) return [];
-      if (Array.isArray(data)) return data;
-      if (typeof data === 'object') return Object.values(data);
-      return [];
-    };
+    // Calcular totales
+    const totalSinImpuesto = items.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
+    const totalConImpuesto = items.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
 
-    // Helper para parsear montos (pueden venir como string con coma)
-    const parseAmount = (amount) => {
-      if (typeof amount === 'number') return amount;
-      if (typeof amount === 'string') {
-        return parseFloat(amount.replace(/,/g, '').replace(/[^0-9.-]/g, '')) || 0;
+    // Agrupar por categoría para resumen
+    const porCategoria = {};
+    items.forEach(p => {
+      if (!porCategoria[p.categoria]) {
+        porCategoria[p.categoria] = { cantidad: 0, total: 0 };
       }
-      return 0;
-    };
+      porCategoria[p.categoria].cantidad += p.cantidad;
+      porCategoria[p.categoria].total += p.ventaConImpuesto;
+    });
 
-    // Procesar turnos
-    const shiftsObj = collectionData?.shifts || {};
-    const shiftKeys = Object.keys(shiftsObj);
-
-    for (const shiftKey of shiftKeys) {
-      const shift = shiftsObj[shiftKey];
-      const shiftName = shift.name || `Turno ${shiftKey}`;
-
-      // Procesar registros/cajas de cada turno
-      const registersObj = shift.registers || {};
-      const registerKeys = Object.keys(registersObj);
-
-      for (const regKey of registerKeys) {
-        const registerArray = toArray(registersObj[regKey]);
-
-        for (const caja of registerArray) {
-          const cajaName = caja.registerName || caja.resgisterName || `Caja ${regKey}`;
-          const finalAmount = parseAmount(caja.finalAmount) || 0;
-          const initialAmount = parseAmount(caja.initialAmount) || 0;
-          const closedBy = caja.closedCashier || 'N/A';
-          const closedDate = caja.closedDate || '';
-
-          // Procesar metodos de pago
-          const paymentMethods = toArray(caja.paymentMethods);
-
-          if (paymentMethods.length > 0) {
-            // Si hay metodos de pago, procesarlos
-            for (const pm of paymentMethods) {
-              const amount = parseAmount(pm.amount);
-              const methodName = (pm.paymentMethod || 'Otro').replace(/,$/g, '').trim();
-
-              totalRecaudacion += amount;
-
-              items.push({
-                producto: methodName,
-                codigo: pm.paymentMethodID || '',
-                precioUnitario: 0,
-                cantidad: 1,
-                ventaSinImpuesto: Math.round(amount / 1.19),
-                ventaConImpuesto: Math.round(amount),
-                categoria: `${shiftName} - ${cajaName}`
-              });
-            }
-          } else if (finalAmount > 0) {
-            // Si no hay metodos pero hay finalAmount, usarlo
-            totalRecaudacion += finalAmount;
-            items.push({
-              producto: `Cierre de caja (${closedBy})`,
-              codigo: closedDate ? closedDate.split('T')[0] : '',
-              precioUnitario: 0,
-              cantidad: 1,
-              ventaSinImpuesto: Math.round(finalAmount / 1.19),
-              ventaConImpuesto: Math.round(finalAmount),
-              categoria: `${shiftName} - ${cajaName}`
-            });
-          } else {
-            // Registrar la caja aunque no tenga montos (para ver la info)
-            items.push({
-              producto: `Caja cerrada por: ${closedBy}`,
-              codigo: closedDate ? closedDate.split('T')[1]?.split('.')[0] || '' : '',
-              precioUnitario: initialAmount,
-              cantidad: 0,
-              ventaSinImpuesto: finalAmount,
-              ventaConImpuesto: finalAmount,
-              categoria: `${shiftName} - ${cajaName}`
-            });
-          }
-        }
-      }
-    }
+    const resumen = Object.entries(porCategoria)
+      .map(([categoria, data]) => ({ categoria, ...data }))
+      .sort((a, b) => b.total - a.total);
 
     const hasData = items.length > 0;
 
@@ -475,16 +406,19 @@ app.get('/api/toteat/ventas', async (req, res) => {
         locationName: 'Domani (API Toteat)',
         beginDate: targetDate,
         endDate: targetDate,
-        totalRevenueExclTax: Math.round(totalRecaudacion / 1.19),
-        totalRevenueInclTax: Math.round(totalRecaudacion)
+        totalRevenueExclTax: totalSinImpuesto,
+        totalRevenueInclTax: totalConImpuesto
       },
+      resumen,
       items,
       hasData,
-      rawData: collectionData
+      mensaje: hasData
+        ? `Total: $${totalConImpuesto.toLocaleString('es-CL')} (${items.length} productos en ${result.data.length} órdenes)`
+        : 'No se encontraron ventas para esta fecha.'
     });
 
   } catch (error) {
-    logger.error('Error obteniendo recaudacion de Toteat:', error);
+    logger.error('Error obteniendo ventas de Toteat:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -496,6 +430,182 @@ app.get('/api/toteat/test', async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(500).json({ connected: false, error: error.message });
+  }
+});
+
+// Endpoint para ver estructura raw de Toteat (DIAGNOSTICO)
+app.get('/api/toteat/raw', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    const result = await toteatService.getCollection(targetDate);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.message });
+    }
+
+    // Devolver datos raw sin procesar para diagnostico
+    res.json({
+      success: true,
+      rawData: result.data,
+      date: targetDate
+    });
+
+  } catch (error) {
+    logger.error('Error en endpoint raw:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint de diagnostico - prueba todos los endpoints de Toteat
+app.get('/api/toteat/diagnose', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    logger.info(`Ejecutando diagnostico de endpoints Toteat para: ${targetDate}`);
+
+    const results = await toteatService.diagnoseEndpoints(targetDate);
+
+    res.json({
+      success: true,
+      date: targetDate,
+      endpoints: results
+    });
+
+  } catch (error) {
+    logger.error('Error en diagnostico:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint para obtener ventas detalladas por producto
+app.get('/api/toteat/sales', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    logger.info(`Obteniendo ventas de Toteat para: ${targetDate}`);
+
+    const result = await toteatService.getSales(targetDate);
+
+    if (!result.success) {
+      return res.json({
+        success: false,
+        error: result.message
+      });
+    }
+
+    // Parsear ventas a productos
+    const products = toteatService.parseSalesToProducts(result.data);
+
+    // Calcular totales
+    const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
+    const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
+
+    // Agrupar por categoría para resumen
+    const porCategoria = {};
+    products.forEach(p => {
+      if (!porCategoria[p.categoria]) {
+        porCategoria[p.categoria] = { cantidad: 0, total: 0 };
+      }
+      porCategoria[p.categoria].cantidad += p.cantidad;
+      porCategoria[p.categoria].total += p.ventaConImpuesto;
+    });
+
+    const resumen = Object.entries(porCategoria)
+      .map(([categoria, data]) => ({ categoria, ...data }))
+      .sort((a, b) => b.total - a.total);
+
+    res.json({
+      success: true,
+      header: {
+        locationName: 'Domani (API Toteat)',
+        beginDate: targetDate,
+        endDate: targetDate,
+        totalRevenueExclTax: totalSinImpuesto,
+        totalRevenueInclTax: totalConImpuesto
+      },
+      resumen,
+      items: products,
+      ordenes: result.data.length,
+      mensaje: `Total: $${totalConImpuesto.toLocaleString('es-CL')} (${products.length} productos en ${result.data.length} órdenes)`
+    });
+
+  } catch (error) {
+    logger.error('Error obteniendo ventas:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint para exportar ventas a Excel (manual)
+app.get('/api/export', async (req, res) => {
+  try {
+    const { date } = req.query;
+    // Si no se especifica fecha, usa ayer
+    let targetDate = date;
+    if (!targetDate) {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      targetDate = yesterday.toISOString().split('T')[0];
+    }
+
+    logger.info(`Exportación manual solicitada para: ${targetDate}`);
+
+    const result = await schedulerService.runManualExport(targetDate);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.json({
+      success: true,
+      mensaje: `Excel generado exitosamente`,
+      archivo: result.filePath,
+      productos: result.productos,
+      ordenes: result.ordenes,
+      total: result.total
+    });
+
+  } catch (error) {
+    logger.error('Error en exportación manual:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint para probar configuración de email
+app.get('/api/email/test', async (req, res) => {
+  try {
+    const result = await emailService.testConnection();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint para descargar el Excel generado
+app.get('/api/export/download', async (req, res) => {
+  try {
+    const { date } = req.query;
+    let targetDate = date;
+    if (!targetDate) {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      targetDate = yesterday.toISOString().split('T')[0];
+    }
+
+    const result = await schedulerService.runManualExport(targetDate);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.download(result.filePath);
+
+  } catch (error) {
+    logger.error('Error descargando Excel:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -680,6 +790,10 @@ app.listen(PORT, () => {
   logger.info(`Ambiente: ${config.server.env}`);
   logger.info('Servicio de procesamiento CSV Toteat listo');
   logger.info(`Accede a http://localhost:${PORT}/upload para subir CSV`);
+
+  // Iniciar tareas programadas
+  schedulerService.start();
+  logger.info('Exportación automática programada: 6:00 AM diario');
 });
 
 // Manejo de errores no capturados
