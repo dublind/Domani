@@ -34,6 +34,11 @@ if (!fs.existsSync(logsDir)) {
 const app = express();
 app.use(express.json());
 
+// Ruta principal - redirige a upload
+app.get('/', (req, res) => {
+  res.redirect('/upload');
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
