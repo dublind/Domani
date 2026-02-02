@@ -614,7 +614,7 @@ app.get('/api/export/download', async (req, res) => {
   }
 });
 
-// Endpoint para generar Excel con resumen por categorias
+// Endpoint para generar Excel en formato Marketman
 app.post('/api/generate-excel', (req, res) => {
   try {
     const { header, items } = req.body;
@@ -623,39 +623,56 @@ app.post('/api/generate-excel', (req, res) => {
       return res.status(400).json({ success: false, error: 'Datos incompletos' });
     }
 
-    // Agrupar por categoria
-    const categorias = {};
-    items.forEach(item => {
-      if (!categorias[item.categoria]) {
-        categorias[item.categoria] = { exclTax: 0, inclTax: 0 };
+    // Formatear fecha como DD/MM/YYYY
+    const formattedDate = header.beginDate.split('-').reverse().join('/');
+
+    // Agrupar productos por nombre y sumar cantidades/totales
+    const productosAgrupados = {};
+    for (const item of items) {
+      const key = item.producto;
+      if (!productosAgrupados[key]) {
+        productosAgrupados[key] = {
+          producto: item.producto,
+          codigo: item.codigo,
+          precioUnitario: item.precioUnitario || 0,
+          cantidad: 0,
+          ventaSinImpuesto: 0,
+          ventaConImpuesto: 0,
+          categoria: item.categoria
+        };
       }
-      categorias[item.categoria].exclTax += item.ventaSinImpuesto;
-      categorias[item.categoria].inclTax += item.ventaConImpuesto;
-    });
+      productosAgrupados[key].cantidad += item.cantidad;
+      productosAgrupados[key].ventaSinImpuesto += item.ventaSinImpuesto;
+      productosAgrupados[key].ventaConImpuesto += item.ventaConImpuesto;
+    }
 
-    // Ordenar por monto descendente
-    const categoriasOrdenadas = Object.entries(categorias)
-      .sort((a, b) => b[1].inclTax - a[1].inclTax);
+    // Convertir a array y ordenar por cantidad descendente
+    const productosOrdenados = Object.values(productosAgrupados)
+      .sort((a, b) => b.cantidad - a.cantidad);
 
-    // Funcion para formatear monto con peso chileno
-    const formatPeso = (num) => '$ ' + num.toLocaleString('es-CL');
-
-    // Crear datos para Excel
+    // Formato Marketman
     const data = [
-      ['Ventas totales :', formatPeso(header.totalRevenueExclTax)],
-      ['Total ventas con impuesto. :', formatPeso(header.totalRevenueInclTax)],
+      ['Location name', 'Domani Providencia'],
+      ['Begin date', formattedDate],
+      ['End date', formattedDate],
+      ['Total revenue excl. tax', header.totalRevenueExclTax],
+      ['Ingresos totales inc. impuesto', header.totalRevenueInclTax],
       [],
-      ['Ventas por categoria'],
-      [],
-      ['CATEGORIA', 'EXL TOTAL. IMPUESTO', 'TOTAL INCL. IMPUESTO']
+      ['ELEMENTO DE MENÚ', 'Menu item code', 'Menu item list price', 'Quantity sold', 'Sales total excl. tax', 'Ventas totales inc. impuesto', 'Categoría']
     ];
 
-    categoriasOrdenadas.forEach(([categoria, totales]) => {
-      data.push([categoria, formatPeso(totales.exclTax), formatPeso(totales.inclTax)]);
-    });
-
-    // Fila de totales
-    data.push(['', formatPeso(header.totalRevenueExclTax), formatPeso(header.totalRevenueInclTax)]);
+    // Agregar productos
+    for (const p of productosOrdenados) {
+      data.push([
+        p.producto,
+        p.codigo,
+        p.precioUnitario,
+        p.cantidad,
+        p.ventaSinImpuesto,
+        p.ventaConImpuesto,
+        p.categoria
+      ]);
+    }
 
     // Crear workbook y worksheet
     const wb = XLSX.utils.book_new();
@@ -663,19 +680,23 @@ app.post('/api/generate-excel', (req, res) => {
 
     // Ajustar ancho de columnas
     ws['!cols'] = [
-      { wch: 35 },
-      { wch: 20 },
-      { wch: 20 }
+      { wch: 35 },  // ELEMENTO DE MENÚ
+      { wch: 15 },  // Menu item code
+      { wch: 18 },  // Menu item list price
+      { wch: 14 },  // Quantity sold
+      { wch: 20 },  // Sales total excl. tax
+      { wch: 25 },  // Ventas totales inc. impuesto
+      { wch: 30 }   // Categoría
     ];
 
-    XLSX.utils.book_append_sheet(wb, ws, 'Ventas por Categoria');
+    XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
 
     // Generar buffer
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
     // Enviar archivo
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="ventas_${header.beginDate}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="ventas_domani_${header.beginDate}.xlsx"`);
     res.send(buffer);
 
   } catch (error) {
