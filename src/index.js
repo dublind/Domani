@@ -589,6 +589,19 @@ app.get('/api/email/test', async (req, res) => {
   }
 });
 
+// Endpoint para ejecutar exportación manual y enviar email
+app.get('/api/export/trigger', async (req, res) => {
+  try {
+    const { date } = req.query;
+    logger.info(`Ejecutando exportación manual trigger${date ? ` para fecha: ${date}` : ''}`);
+    const result = await schedulerService.runManualExport(date || null);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error en trigger de exportación:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Endpoint para descargar el Excel generado
 app.get('/api/export/download', async (req, res) => {
   try {
@@ -819,7 +832,7 @@ app.listen(PORT, () => {
 
   // Iniciar tareas programadas
   schedulerService.start();
-  logger.info('Exportación automática programada: 6:00 AM diario');
+  logger.info('Exportación automática programada: 11:50 AM Chile (testing)');
 });
 
 // Manejo de errores no capturados
