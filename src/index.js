@@ -41,52 +41,66 @@ app.get('/panel', (req, res) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Ventas Toteat - Domani</title>
       <style>
-        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 30px auto; padding: 20px; background: #f0f0f0; }
-        h1 { color: #2e7d32; }
-        h2 { color: #1976D2; margin-top: 0; }
-        .section { background: white; padding: 25px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .form-group { margin: 15px 0; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="date"] { padding: 10px; width: 250px; border: 1px solid #ddd; border-radius: 5px; }
-        button { padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; margin-top: 10px; }
-        .btn-primary { background: #4CAF50; color: white; }
-        .btn-primary:hover { background: #45a049; }
-        .btn-api { background: #FF5722; color: white; }
-        .btn-api:hover { background: #E64A19; }
-        .btn-download { background: #2196F3; color: white; }
-        .btn-download:hover { background: #1976D2; }
-        #result { margin-top: 20px; padding: 20px; background: white; border-radius: 10px; display: none; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background: #4CAF50; color: white; }
-        tr:nth-child(even) { background: #f9f9f9; }
-        .header-info { background: #e8f5e9; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-        .header-info p { margin: 5px 0; }
-        .error { color: red; }
-        .loading { color: #666; font-style: italic; }
-        .info-box { background: #ffebee; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #f44336; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); min-height: 100vh; padding: 30px 20px; color: #e0e0e0; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { font-size: 2.2em; color: #fff; letter-spacing: 1px; }
+        .header h1 span { color: #e94560; }
+        .header p { color: #8892b0; margin-top: 5px; font-size: 14px; }
+        .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); padding: 30px; border-radius: 16px; margin-bottom: 20px; }
+        .form-row { display: flex; align-items: flex-end; gap: 15px; flex-wrap: wrap; }
+        .form-group { flex: 0 0 auto; }
+        .form-group label { display: block; margin-bottom: 8px; font-size: 13px; color: #8892b0; text-transform: uppercase; letter-spacing: 1px; }
+        input[type="date"] { padding: 12px 16px; width: 220px; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; background: rgba(255,255,255,0.08); color: #fff; font-size: 15px; outline: none; transition: border-color 0.3s; }
+        input[type="date"]:focus { border-color: #e94560; }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+        .btn { padding: 12px 28px; border: none; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; transition: all 0.3s; display: inline-flex; align-items: center; gap: 8px; }
+        .btn-fetch { background: linear-gradient(135deg, #e94560, #c81d4e); color: white; }
+        .btn-fetch:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(233,69,96,0.4); }
+        .btn-test { background: rgba(255,255,255,0.1); color: #8892b0; border: 1px solid rgba(255,255,255,0.15); }
+        .btn-test:hover { background: rgba(255,255,255,0.15); color: #fff; }
+        .btn-download { background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; display: none; }
+        .btn-download:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(14,165,233,0.4); }
+        #result { margin-top: 20px; display: none; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px; text-align: center; }
+        .stat-card .label { font-size: 12px; color: #8892b0; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-card .value { font-size: 1.6em; font-weight: 700; color: #fff; margin-top: 5px; }
+        .stat-card .value.green { color: #4ade80; }
+        .stat-card .value.blue { color: #60a5fa; }
+        .stat-card .value.red { color: #e94560; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 13px; }
+        th { background: rgba(233,69,96,0.2); color: #e94560; padding: 12px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid rgba(233,69,96,0.3); }
+        td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); color: #ccd6f6; }
+        tr:hover td { background: rgba(255,255,255,0.03); }
+        .error { color: #f87171; background: rgba(248,113,113,0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(248,113,113,0.2); }
+        .loading { color: #8892b0; padding: 30px; text-align: center; font-size: 16px; }
+        .total-row { font-weight: 700; color: #fff; }
+        @media (max-width: 600px) { .form-row { flex-direction: column; } input[type="date"] { width: 100%; } .btn { width: 100%; justify-content: center; } }
       </style>
     </head>
     <body>
-      <h1>Ventas Toteat - Domani</h1>
-
-      <div class="section">
-        <h2>Obtener Ventas desde API Toteat</h2>
-        <div class="info-box">
-          <strong>Nota:</strong> La API de Toteat tiene limite de 1 solicitud por minuto. Los datos vienen agrupados por turnos.
+      <div class="container">
+        <div class="header">
+          <h1>Domani <span>Ventas</span></h1>
+          <p>Panel de consulta de ventas - Toteat API</p>
         </div>
 
-        <div class="form-group">
-          <label>Fecha a consultar:</label>
-          <input type="date" id="apiDate" value="${new Date().toISOString().split('T')[0]}">
+        <div class="card">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Fecha a consultar</label>
+              <input type="date" id="apiDate" value="${new Date().toISOString().split('T')[0]}">
+            </div>
+            <button class="btn btn-fetch" onclick="fetchFromAPI()">Obtener Ventas</button>
+            <button class="btn btn-test" onclick="testAPI()">Probar Conexion</button>
+            <button class="btn btn-download" onclick="downloadExcel()" id="btnDownload">Descargar Excel</button>
+          </div>
         </div>
 
-        <button class="btn-api" onclick="fetchFromAPI()">Obtener Ventas</button>
-        <button class="btn-primary" onclick="testAPI()">Probar Conexion</button>
-        <button class="btn-download" onclick="downloadExcel()" id="btnDownload" style="display:none;">Descargar Excel</button>
+        <div id="result"></div>
       </div>
-
-      <div id="result"></div>
 
       <script>
         let lastDate = null;
@@ -100,12 +114,12 @@ app.get('/panel', (req, res) => {
             const response = await fetch('/api/toteat/test');
             const data = await response.json();
             if (data.connected) {
-              resultDiv.innerHTML = '<p style="color:green;font-weight:bold;">Conexion exitosa con API Toteat</p>';
+              resultDiv.innerHTML = '<div class="card" style="border-color:rgba(74,222,128,0.3);"><p style="color:#4ade80;font-weight:bold;text-align:center;font-size:18px;">Conexion exitosa con API Toteat</p></div>';
             } else {
-              resultDiv.innerHTML = '<p class="error">Error: ' + (data.error || 'No se pudo conectar') + '</p>';
+              resultDiv.innerHTML = '<div class="error">Error: ' + (data.error || 'No se pudo conectar') + '</div>';
             }
           } catch (error) {
-            resultDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+            resultDiv.innerHTML = '<div class="error">Error: ' + error.message + '</div>';
           }
         }
 
@@ -115,52 +129,55 @@ app.get('/panel', (req, res) => {
           lastDate = apiDate;
 
           resultDiv.style.display = 'block';
-          resultDiv.innerHTML = '<p class="loading">Obteniendo datos de Toteat... (puede tardar unos segundos)</p>';
+          resultDiv.innerHTML = '<p class="loading">Obteniendo datos de Toteat...</p>';
 
           try {
             const response = await fetch('/api/toteat/ventas?date=' + apiDate);
             const data = await response.json();
             displayResult(data);
           } catch (error) {
-            resultDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+            resultDiv.innerHTML = '<div class="error">Error: ' + error.message + '</div>';
           }
         }
 
         function displayResult(data) {
           const resultDiv = document.getElementById('result');
           if (data.success) {
-            document.getElementById('btnDownload').style.display = 'inline-block';
+            document.getElementById('btnDownload').style.display = 'inline-flex';
 
-            let html = '<div class="header-info">';
-            html += '<p><strong>Location name:</strong> ' + data.header.locationName + '</p>';
-            html += '<p><strong>Fecha:</strong> ' + data.header.beginDate + '</p>';
-            html += '<p><strong>Total sin impuesto:</strong> $' + data.header.totalRevenueExclTax.toLocaleString() + '</p>';
-            html += '<p><strong>Total con impuesto:</strong> $' + data.header.totalRevenueInclTax.toLocaleString() + '</p>';
+            const totalItems = data.items ? data.items.length : 0;
+
+            let html = '<div class="stats-grid">';
+            html += '<div class="stat-card"><div class="label">Fecha</div><div class="value blue">' + data.header.beginDate + '</div></div>';
+            html += '<div class="stat-card"><div class="label">Productos</div><div class="value">' + totalItems + '</div></div>';
+            html += '<div class="stat-card"><div class="label">Total sin IVA</div><div class="value green">$' + data.header.totalRevenueExclTax.toLocaleString('es-CL') + '</div></div>';
+            html += '<div class="stat-card"><div class="label">Total con IVA</div><div class="value red">$' + data.header.totalRevenueInclTax.toLocaleString('es-CL') + '</div></div>';
             html += '</div>';
 
             if (data.items && data.items.length > 0) {
+              html += '<div class="card">';
               html += '<table>';
               html += '<tr><th>Producto</th><th>Codigo</th><th>Precio Unit.</th><th>Cantidad</th><th>Venta sin IVA</th><th>Venta con IVA</th><th>Categoria</th></tr>';
               data.items.forEach(item => {
                 html += '<tr>';
                 html += '<td>' + item.producto + '</td>';
                 html += '<td>' + item.codigo + '</td>';
-                html += '<td>$' + (item.precioUnitario || 0).toLocaleString() + '</td>';
+                html += '<td>$' + (item.precioUnitario || 0).toLocaleString('es-CL') + '</td>';
                 html += '<td>' + item.cantidad + '</td>';
-                html += '<td>$' + (item.ventaSinImpuesto || 0).toLocaleString() + '</td>';
-                html += '<td>$' + (item.ventaConImpuesto || 0).toLocaleString() + '</td>';
+                html += '<td>$' + (item.ventaSinImpuesto || 0).toLocaleString('es-CL') + '</td>';
+                html += '<td>$' + (item.ventaConImpuesto || 0).toLocaleString('es-CL') + '</td>';
                 html += '<td>' + item.categoria + '</td>';
                 html += '</tr>';
               });
               html += '</table>';
-              html += '<p><strong>Total productos:</strong> ' + data.items.length + '</p>';
+              html += '</div>';
             } else {
-              html += '<p>No se encontraron items detallados para esta fecha.</p>';
+              html += '<div class="card"><p style="text-align:center;color:#8892b0;">No se encontraron ventas para esta fecha.</p></div>';
             }
 
             resultDiv.innerHTML = html;
           } else {
-            resultDiv.innerHTML = '<p class="error">Error: ' + data.error + '</p>';
+            resultDiv.innerHTML = '<div class="error">Error: ' + data.error + '</div>';
           }
         }
 
