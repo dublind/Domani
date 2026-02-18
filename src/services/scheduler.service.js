@@ -120,11 +120,13 @@ class SchedulerService {
 
   /**
    * Genera el archivo Excel en formato Marketman
+   * @param {string} startDate - Fecha inicio (YYYY-MM-DD)
+   * @param {string} endDate - Fecha fin (YYYY-MM-DD), opcional
    */
-  async generateExcel(dateStr, products, porCategoria, totales) {
-    // Formatear fecha como DD/MM/YYYY
-    const [year, month, day] = dateStr.split('-');
-    const formattedDate = `${day}/${month}/${year}`;
+  async generateExcel(startDate, products, porCategoria, totales, endDate = null) {
+    const formatDate = (d) => { const [y, m, dd] = d.split('-'); return `${dd}/${m}/${y}`; };
+    const formattedStart = formatDate(startDate);
+    const formattedEnd = endDate ? formatDate(endDate) : formattedStart;
 
     // Agrupar productos por nombre y sumar cantidades/totales
     const productosAgrupados = {};
@@ -153,8 +155,8 @@ class SchedulerService {
     // Formato Marketman
     const data = [
       ['Location name', 'Domani Providencia'],
-      ['Begin date', formattedDate],
-      ['End date', formattedDate],
+      ['Begin date', formattedStart],
+      ['End date', formattedEnd],
       ['Total revenue excl. tax', totales.totalSinImpuesto],
       ['Ingresos totales inc. impuesto', totales.totalConImpuesto],
       [], // Fila vacía
@@ -192,12 +194,59 @@ class SchedulerService {
     XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
 
     // Guardar archivo
-    const fileName = `ventas_domani_${dateStr}.xlsx`;
+    const fileName = endDate && endDate !== startDate
+      ? `ventas_domani_${startDate}_a_${endDate}.xlsx`
+      : `ventas_domani_${startDate}.xlsx`;
     const filePath = path.join(this.exportDir, fileName);
 
     XLSX.writeFile(wb, filePath);
 
     return filePath;
+  }
+
+  /**
+   * Exporta ventas de un rango de fechas a Excel
+   */
+  async runRangeExport(startDate, endDate) {
+    logger.info(`Exportación de rango: ${startDate} a ${endDate}`);
+
+    const result = await toteatService.getSales(startDate, endDate);
+
+    if (!result.success) {
+      return { success: false, error: result.message };
+    }
+
+    if (!result.data || result.data.length === 0) {
+      return { success: false, error: 'No hay ventas para este rango de fechas' };
+    }
+
+    const products = toteatService.parseSalesToProducts(result.data);
+    const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
+    const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
+
+    const porCategoria = {};
+    products.forEach(p => {
+      if (!porCategoria[p.categoria]) {
+        porCategoria[p.categoria] = { cantidad: 0, totalSinIva: 0, totalConIva: 0 };
+      }
+      porCategoria[p.categoria].cantidad += p.cantidad;
+      porCategoria[p.categoria].totalSinIva += p.ventaSinImpuesto;
+      porCategoria[p.categoria].totalConIva += p.ventaConImpuesto;
+    });
+
+    const filePath = await this.generateExcel(startDate, products, porCategoria, {
+      totalSinImpuesto,
+      totalConImpuesto,
+      ordenes: result.data.length
+    }, endDate);
+
+    return {
+      success: true,
+      filePath,
+      productos: products.length,
+      ordenes: result.data.length,
+      total: totalConImpuesto
+    };
   }
 
   /**

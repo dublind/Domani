@@ -90,8 +90,12 @@ app.get('/panel', (req, res) => {
         <div class="card">
           <div class="form-row">
             <div class="form-group">
-              <label>Fecha a consultar</label>
-              <input type="date" id="apiDate" value="${new Date().toISOString().split('T')[0]}">
+              <label>Fecha inicio</label>
+              <input type="date" id="startDate">
+            </div>
+            <div class="form-group">
+              <label>Fecha fin</label>
+              <input type="date" id="endDate">
             </div>
             <button class="btn btn-fetch" onclick="fetchFromAPI()">Obtener Ventas</button>
             <button class="btn btn-test" onclick="testAPI()">Probar Conexion</button>
@@ -103,7 +107,17 @@ app.get('/panel', (req, res) => {
       </div>
 
       <script>
-        let lastDate = null;
+        let lastStart = null;
+        let lastEnd = null;
+
+        // Establecer rango por defecto: ultimos 7 dias
+        (function() {
+          const today = new Date();
+          const weekAgo = new Date();
+          weekAgo.setDate(today.getDate() - 7);
+          document.getElementById('endDate').value = today.toISOString().split('T')[0];
+          document.getElementById('startDate').value = weekAgo.toISOString().split('T')[0];
+        })();
 
         async function testAPI() {
           const resultDiv = document.getElementById('result');
@@ -125,14 +139,28 @@ app.get('/panel', (req, res) => {
 
         async function fetchFromAPI() {
           const resultDiv = document.getElementById('result');
-          const apiDate = document.getElementById('apiDate').value;
-          lastDate = apiDate;
+          const startDate = document.getElementById('startDate').value;
+          const endDate = document.getElementById('endDate').value;
+          lastStart = startDate;
+          lastEnd = endDate;
+
+          if (!startDate || !endDate) {
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div class="error">Selecciona fecha inicio y fecha fin</div>';
+            return;
+          }
+
+          if (startDate > endDate) {
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div class="error">La fecha inicio debe ser anterior a la fecha fin</div>';
+            return;
+          }
 
           resultDiv.style.display = 'block';
           resultDiv.innerHTML = '<p class="loading">Obteniendo datos de Toteat...</p>';
 
           try {
-            const response = await fetch('/api/toteat/ventas?date=' + apiDate);
+            const response = await fetch('/api/toteat/ventas?start=' + startDate + '&end=' + endDate);
             const data = await response.json();
             displayResult(data);
           } catch (error) {
@@ -146,9 +174,12 @@ app.get('/panel', (req, res) => {
             document.getElementById('btnDownload').style.display = 'inline-flex';
 
             const totalItems = data.items ? data.items.length : 0;
+            const rangeLabel = data.header.beginDate === data.header.endDate
+              ? data.header.beginDate
+              : data.header.beginDate + ' a ' + data.header.endDate;
 
             let html = '<div class="stats-grid">';
-            html += '<div class="stat-card"><div class="label">Fecha</div><div class="value blue">' + data.header.beginDate + '</div></div>';
+            html += '<div class="stat-card"><div class="label">Rango</div><div class="value blue" style="font-size:1em;">' + rangeLabel + '</div></div>';
             html += '<div class="stat-card"><div class="label">Productos</div><div class="value">' + totalItems + '</div></div>';
             html += '<div class="stat-card"><div class="label">Total sin IVA</div><div class="value green">$' + data.header.totalRevenueExclTax.toLocaleString('es-CL') + '</div></div>';
             html += '<div class="stat-card"><div class="label">Total con IVA</div><div class="value red">$' + data.header.totalRevenueInclTax.toLocaleString('es-CL') + '</div></div>';
@@ -172,7 +203,7 @@ app.get('/panel', (req, res) => {
               html += '</table>';
               html += '</div>';
             } else {
-              html += '<div class="card"><p style="text-align:center;color:#8892b0;">No se encontraron ventas para esta fecha.</p></div>';
+              html += '<div class="card"><p style="text-align:center;color:#8892b0;">No se encontraron ventas para este rango.</p></div>';
             }
 
             resultDiv.innerHTML = html;
@@ -182,14 +213,14 @@ app.get('/panel', (req, res) => {
         }
 
         async function downloadExcel() {
-          if (!lastDate) return;
+          if (!lastStart || !lastEnd) return;
           try {
-            const response = await fetch('/api/export/download?date=' + lastDate);
+            const response = await fetch('/api/export/download-range?start=' + lastStart + '&end=' + lastEnd);
             if (!response.ok) throw new Error('Error generando Excel');
             const blob = await response.blob();
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = 'ventas_domani_' + lastDate + '.xlsx';
+            link.download = 'ventas_domani_' + lastStart + '_a_' + lastEnd + '.xlsx';
             link.click();
           } catch (error) {
             alert('Error descargando Excel: ' + error.message);
@@ -204,12 +235,13 @@ app.get('/panel', (req, res) => {
 // Endpoint para obtener ventas desde API Toteat (usa /sales con ini/end)
 app.get('/api/toteat/ventas', async (req, res) => {
   try {
-    const { date } = req.query;
-    const targetDate = date || new Date().toISOString().split('T')[0];
+    const { start, end, date } = req.query;
+    const startDate = start || date || new Date().toISOString().split('T')[0];
+    const endDate = end || startDate;
 
-    logger.info(`Obteniendo ventas de Toteat para: ${targetDate}`);
+    logger.info(`Obteniendo ventas de Toteat para: ${startDate} a ${endDate}`);
 
-    const result = await toteatService.getSales(targetDate);
+    const result = await toteatService.getSales(startDate, endDate);
 
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.message });
@@ -242,8 +274,8 @@ app.get('/api/toteat/ventas', async (req, res) => {
       success: true,
       header: {
         locationName: 'Domani (API Toteat)',
-        beginDate: targetDate,
-        endDate: targetDate,
+        beginDate: startDate,
+        endDate: endDate,
         totalRevenueExclTax: totalSinImpuesto,
         totalRevenueInclTax: totalConImpuesto
       },
@@ -252,7 +284,7 @@ app.get('/api/toteat/ventas', async (req, res) => {
       hasData,
       mensaje: hasData
         ? `Total: $${totalConImpuesto.toLocaleString('es-CL')} (${items.length} productos en ${result.data.length} órdenes)`
-        : 'No se encontraron ventas para esta fecha.'
+        : 'No se encontraron ventas para este rango.'
     });
 
   } catch (error) {
@@ -456,6 +488,30 @@ app.get('/api/export/download', async (req, res) => {
 
   } catch (error) {
     logger.error('Error descargando Excel:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint para descargar Excel de un rango de fechas
+app.get('/api/export/download-range', async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    if (!start || !end) {
+      return res.status(400).json({ success: false, error: 'Se requieren parametros start y end' });
+    }
+
+    logger.info(`Descargando Excel rango: ${start} a ${end}`);
+
+    const result = await schedulerService.runRangeExport(start, end);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.download(result.filePath);
+
+  } catch (error) {
+    logger.error('Error descargando Excel rango:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

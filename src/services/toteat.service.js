@@ -241,17 +241,21 @@ class ToteatService {
   }
 
   /**
-   * Obtiene las ventas de un dia desde la API de Toteat
+   * Obtiene las ventas desde la API de Toteat
    * Usa el endpoint /sales con parámetros ini y end (formato YYYYMMDD)
+   * @param {string} startDate - Fecha inicio (YYYY-MM-DD)
+   * @param {string} endDate - Fecha fin (YYYY-MM-DD), opcional (usa startDate si no se pasa)
    */
-  async getSales(date = null) {
-    const targetDate = date ? new Date(date) : new Date();
-    const dateStr = targetDate.toISOString().split('T')[0].replace(/-/g, '');
+  async getSales(startDate = null, endDate = null) {
+    const start = startDate ? new Date(startDate) : new Date();
+    const end = endDate ? new Date(endDate) : start;
+    const startStr = start.toISOString().split('T')[0].replace(/-/g, '');
+    const endStr = end.toISOString().split('T')[0].replace(/-/g, '');
 
-    logger.info(`Consultando ventas de Toteat para fecha: ${dateStr}`);
+    logger.info(`Consultando ventas de Toteat para rango: ${startStr} - ${endStr}`);
 
     try {
-      const url = `${TOTEAT_CONFIG.baseUrl}/sales?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&ini=${dateStr}&end=${dateStr}`;
+      const url = `${TOTEAT_CONFIG.baseUrl}/sales?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&ini=${startStr}&end=${endStr}`;
 
       logger.info(`URL sales: ${url}`);
 
