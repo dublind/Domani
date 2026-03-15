@@ -205,7 +205,7 @@ class SchedulerService {
       { wch: 30 }   // Categoría
     ];
 
-    XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
 
     // Guardar archivo
     const fileName = endDate && endDate !== startDate
@@ -297,6 +297,18 @@ class SchedulerService {
         totalConImpuesto,
         ordenes: result.data.length
       });
+
+      // Subir ventas a MarketMan
+      const marketmanResult = await marketmanService.uploadSales(dateStr, dateStr, products, {
+        totalSinImpuesto,
+        totalConImpuesto
+      });
+
+      if (marketmanResult.success) {
+        logger.info('Ventas subidas a MarketMan correctamente');
+      } else {
+        logger.warn(`MarketMan upload falló: ${marketmanResult.error}`);
+      }
 
       // Enviar por email
       const emailResult = await emailService.sendSalesReport(filePath, dateStr, {

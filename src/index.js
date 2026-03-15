@@ -6,6 +6,7 @@ const logger = require('./utils/logger');
 const toteatService = require('./services/toteat.service');
 const schedulerService = require('./services/scheduler.service');
 const emailService = require('./services/email.service');
+const marketmanService = require('./services/marketman.service');
 
 // Crear directorio de logs si no existe
 const logsDir = path.join(__dirname, '..', 'logs');
@@ -449,6 +450,32 @@ app.get('/api/email/test', async (req, res) => {
   try {
     const result = await emailService.testConnection();
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// MarketMan: test de conexión
+app.get('/api/marketman/test', async (req, res) => {
+  try {
+    const result = await marketmanService.testConnection();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// MarketMan: obtener cuentas autorizadas (para ver el BuyerGuid)
+app.get('/api/marketman/accounts', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const token = await marketmanService.getAccessToken();
+    const response = await axios.post(
+      'https://api.marketman.com/v3/buyers/partneraccounts/GetAuthorisedAccounts',
+      {},
+      { headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' } }
+    );
+    res.json(response.data);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
