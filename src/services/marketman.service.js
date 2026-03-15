@@ -19,29 +19,22 @@ class MarketManService {
   sanitizeName(text) {
     if (!text) return '';
     return text
-      // Remover emojis y simbolos unicode (rangos comunes de emojis)
-      .replace(/[\u{1F600}-\u{1F64F}]/gu, '')  // emoticones
-      .replace(/[\u{1F300}-\u{1F5FF}]/gu, '')  // simbolos y pictogramas
-      .replace(/[\u{1F680}-\u{1F6FF}]/gu, '')  // transporte y mapas
-      .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '')  // banderas
-      .replace(/[\u{2600}-\u{26FF}]/gu, '')     // simbolos misc
-      .replace(/[\u{2700}-\u{27BF}]/gu, '')     // dingbats
-      .replace(/[\u{FE00}-\u{FE0F}]/gu, '')     // selectores de variacion
-      .replace(/[\u{200D}]/gu, '')               // zero width joiner
-      .replace(/[\u{20E3}]/gu, '')               // combining enclosing keycap
-      .replace(/[\u{E0020}-\u{E007F}]/gu, '')   // tags
-      .replace(/►/g, '')                          // flecha especial usada en categorias Toteat
-      .replace(/\s+/g, ' ')                       // colapsar espacios multiples
+      // Mantener solo caracteres ASCII seguros: letras, numeros, espacios, puntuacion basica
+      // Incluye letras acentuadas comunes del espanol (á-ú, ñ, Á-Ú, Ñ)
+      .replace(/[^\w\sáéíóúñÁÉÍÓÚÑ&.,;:()/'"-]/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
   /**
    * Limpia el ID de categoria para MarketMan
-   * Remueve caracteres especiales que causan rechazo
+   * Remueve caracteres especiales y normaliza a mayusculas
+   * (Toteat puede enviar "AGREGADOS" y "Agregados" como categorias distintas)
    */
   sanitizeCategoryID(category) {
-    if (!category) return 'General';
-    return this.sanitizeName(category) || 'General';
+    if (!category) return 'GENERAL';
+    const cleaned = this.sanitizeName(category);
+    return cleaned ? cleaned.toUpperCase() : 'GENERAL';
   }
 
   /**
