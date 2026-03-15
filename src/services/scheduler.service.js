@@ -4,6 +4,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 const toteatService = require('./toteat.service');
 const emailService = require('./email.service');
+const marketmanService = require('./marketman.service');
 const logger = require('../utils/logger');
 
 class SchedulerService {
@@ -90,6 +91,18 @@ class SchedulerService {
 
       logger.info(`Excel exportado exitosamente: ${filePath}`);
 
+      // Subir ventas a MarketMan
+      const marketmanResult = await marketmanService.uploadSales(dateStr, dateStr, products, {
+        totalSinImpuesto,
+        totalConImpuesto
+      });
+
+      if (marketmanResult.success) {
+        logger.info('Ventas subidas a MarketMan correctamente');
+      } else {
+        logger.warn(`MarketMan upload falló: ${marketmanResult.error}`);
+      }
+
       // Enviar por email
       const emailResult = await emailService.sendSalesReport(filePath, dateStr, {
         productos: products.length,
@@ -109,7 +122,8 @@ class SchedulerService {
         productos: products.length,
         ordenes: result.data.length,
         total: totalConImpuesto,
-        emailSent: emailResult.success
+        emailSent: emailResult.success,
+        marketmanUploaded: marketmanResult.success
       };
 
     } catch (error) {
