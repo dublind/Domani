@@ -27,16 +27,16 @@ class SchedulerService {
    * Inicia las tareas programadas
    */
   start() {
-    // Ejecutar todos los días a las 1:00 PM hora Chile
-    // Formato cron: minuto hora día mes díaSemana
-    cron.schedule('0 13 * * *', async () => {
-      logger.info('=== TAREA PROGRAMADA: Exportación automática de ventas ===');
+    // Ejecutar todos los dias a las 8:00 AM hora Chile
+    // Formato cron: minuto hora dia mes diaSemana
+    cron.schedule('0 8 * * *', async () => {
+      logger.info('=== TAREA PROGRAMADA: Exportacion automatica de ventas ===');
       await this.exportYesterdaySales();
     }, {
       timezone: 'America/Santiago' // Zona horaria de Chile
     });
 
-    logger.info('Tarea programada configurada: Exportación diaria a las 1:00 PM (Chile)');
+    logger.info('Tarea programada configurada: Exportacion diaria a las 8:00 AM (Chile)');
   }
 
   /**

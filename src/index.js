@@ -554,7 +554,7 @@ app.listen(PORT, () => {
 
   // Iniciar tareas programadas
   schedulerService.start();
-  logger.info('Exportación automática programada: 1:00 PM Chile (testing)');
+  logger.info('Exportacion automatica programada: 8:00 AM Chile');
 });
 
 // Manejo de errores no capturados
