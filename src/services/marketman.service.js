@@ -126,10 +126,12 @@ class MarketManService {
         return { success: false, error: response.data.ErrorMessage, code: response.data.ErrorCode };
       }
 
-      // 1. Registrar categorias
+      // 1. Registrar categorias (REQUERIDO antes de menu items)
       const categoriesResult = await this.syncCategories(productosSanitizados);
       if (!categoriesResult.success) {
-        logger.warn(`MarketMan sync categorias fallo: ${categoriesResult.error}`);
+        logger.error(`MarketMan sync categorias fallo: ${categoriesResult.error}`);
+        logger.error('MarketMan: NO se pueden crear menu items sin categorias registradas');
+        return { success: false, error: `Categorias fallaron: ${categoriesResult.error}` };
       }
 
       // 2. Registrar items del menu (REQUERIDO antes de crear checks)
@@ -463,6 +465,7 @@ class MarketManService {
   /**
    * Crea solo las categorias nuevas en MarketMan
    * Usa nombres sanitizados para evitar rechazos por caracteres especiales
+   * Reintenta una por una si el lote falla
    */
   async syncCategories(products) {
     try {
@@ -476,7 +479,7 @@ class MarketManService {
       const existingIDs = new Set(
         (existingRes.data.POSCategories || []).map(c => c.CategoryPOSID)
       );
-      logger.info(`MarketMan: ${existingIDs.size} categorias ya existen`);
+      logger.info(`MarketMan: ${existingIDs.size} categorias ya existen: ${[...existingIDs].join(', ')}`);
 
       // Solo crear las que no existen (ya sanitizadas en sanitizeProducts)
       const categoriasUnicas = [...new Set(products.map(p => p.categoria || 'General'))];
@@ -491,6 +494,7 @@ class MarketManService {
 
       logger.info(`MarketMan: creando ${nuevas.length} categorias nuevas: ${nuevas.map(c => c.Name).join(', ')}`);
 
+      // Intentar crear todas de una vez
       const response = await axios.post(`${BASE_URL}/buyers/pos/CreatePOSCategories`, {
         BuyerGuid: this.buyerGuid,
         POSCategories: nuevas
@@ -498,16 +502,44 @@ class MarketManService {
 
       if (response.data.IsSuccess) {
         logger.info('MarketMan: nuevas categorias creadas correctamente');
-      } else {
-        logger.warn(`MarketMan CreatePOSCategories: ${response.data.ErrorMessage}`);
+        return { success: true };
       }
 
-      return { success: true };
+      // Si fallo el lote, intentar crear una por una
+      logger.warn(`MarketMan CreatePOSCategories lote fallo: ${response.data.ErrorMessage}. Intentando una por una...`);
+      let creadas = 0;
+      let fallidas = 0;
+
+      for (const cat of nuevas) {
+        try {
+          const r = await axios.post(`${BASE_URL}/buyers/pos/CreatePOSCategories`, {
+            BuyerGuid: this.buyerGuid,
+            POSCategories: [cat]
+          }, { headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' } });
+
+          if (r.data.IsSuccess) {
+            creadas++;
+            logger.info(`MarketMan: categoria "${cat.Name}" creada`);
+          } else if (String(r.data.ErrorCode) === '22' || (r.data.ErrorMessage || '').includes('already exist')) {
+            creadas++;
+            logger.info(`MarketMan: categoria "${cat.Name}" ya existia`);
+          } else {
+            fallidas++;
+            logger.error(`MarketMan: categoria "${cat.Name}" fallo: ${r.data.ErrorMessage}`);
+          }
+        } catch (err) {
+          fallidas++;
+          logger.error(`MarketMan: categoria "${cat.Name}" error: ${err.message}`);
+        }
+      }
+
+      logger.info(`MarketMan: categorias - ${creadas} creadas, ${fallidas} fallidas`);
+      return { success: fallidas === 0, error: fallidas > 0 ? `${fallidas} categorias no se pudieron crear` : null };
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
       logger.error(`MarketMan: error sincronizando categorias: ${msg}`);
-      return { success: true }; // No bloquear el flujo por categorias
+      return { success: false, error: msg };
     }
   }
 
