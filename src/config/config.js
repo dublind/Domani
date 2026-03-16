@@ -10,7 +10,7 @@ module.exports = {
   // Toteat Configuration
   toteat: {
     apiUrl: cfg.TOTEAT_BASE_URL || 'https://api.toteat.com/mw/or/1.0',
-    apiKey: cfg.TOTEAT_API_KEY,
+    apiKey: cfg.TOTEAT_API_KEY || cfg.TOTEAT_TOKEN,
     apiUserId: cfg.TOTEAT_USER_ID || '1001',
     restaurantId: cfg.TOTEAT_RESTAURANT_ID,
     localId: cfg.TOTEAT_LOCAL_ID || '1',
@@ -32,7 +32,7 @@ module.exports = {
 
   // Cron Configuration
   cron: {
-    schedule: cfg.CRON_SCHEDULE || '0 6 * * *'
+    schedule: cfg.CRON_SCHEDULE || '0 8 * * *'
   },
 
   // Logging Configuration
