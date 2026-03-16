@@ -219,9 +219,10 @@ class MarketManService {
 
       const productosLista = Object.values(productosAgrupados);
 
-      // Crear un check por producto
+      // Crear un check por producto (timestamp para evitar colision con reintentos)
+      const ts = Date.now();
       const checks = productosLista.map((p, index) => ({
-        CheckPOSID: `${containerID}_${index + 1}`,
+        CheckPOSID: `${containerID}_${ts}_${index + 1}`,
         DateTimeOpenUTC: fromDateUTC,
         DateTimeCloseUTC: toDateUTC,
         Items: [{
@@ -247,9 +248,11 @@ class MarketManService {
         logger.info('MarketMan: checks creados correctamente');
         return { success: true };
       } else {
-        // Loguear items invalidos especificamente
+        const errorMsg = response.data.ErrorMessage || response.data.errorMessage || 'Error desconocido';
+        const errorCode = response.data.ErrorCode || response.data.errorCode || '';
+        logger.error(`MarketMan CreateChecks error: ${errorMsg} (code: ${errorCode})`);
         this.logInvalidChecks(response.data);
-        return { success: false, error: response.data.ErrorMessage };
+        return { success: false, error: errorMsg };
       }
 
     } catch (error) {
@@ -428,31 +431,53 @@ class MarketManService {
 
   /**
    * Loguea los checks invalidos para diagnostico
+   * Revisa validacion a nivel de Check Y a nivel de Item
    */
   logInvalidChecks(responseData) {
     if (!responseData || !responseData.Checks) {
-      logger.error(`MarketMan CreateChecks error: ${responseData?.ErrorMessage} (sin detalle de checks)`);
+      logger.error(`MarketMan CreateChecks: sin detalle de checks en respuesta`);
+      logger.error(`MarketMan CreateChecks respuesta completa: ${JSON.stringify(responseData).substring(0, 3000)}`);
       return;
     }
 
-    let totalInvalidos = 0;
+    let checksInvalidos = 0;
+    let itemsInvalidos = 0;
+    let logged = 0;
+
     for (const check of responseData.Checks) {
+      // Revisar validacion a nivel de CHECK
+      if (check.ValidationResult && !check.ValidationResult.IsValid) {
+        checksInvalidos++;
+        if (logged < 10) {
+          logger.error(`  Check invalido: ID=${check.CheckPOSID} Errores: ${JSON.stringify(check.ValidationResult.Errors)}`);
+          logged++;
+        }
+      }
+
+      // Revisar validacion a nivel de ITEM dentro del check
       if (check.Items) {
         for (const item of check.Items) {
           if (item.ValidationResult && !item.ValidationResult.IsValid) {
-            totalInvalidos++;
-            if (totalInvalidos <= 10) {
-              logger.error(`  Check invalido: CheckID=${check.CheckPOSID} ItemID=${item.ItemPOSID} Errores: ${JSON.stringify(item.ValidationResult.Errors)}`);
+            itemsInvalidos++;
+            if (logged < 10) {
+              logger.error(`  Item invalido en check ${check.CheckPOSID}: ItemID=${item.ItemPOSID} Errores: ${JSON.stringify(item.ValidationResult.Errors)}`);
+              logged++;
             }
           }
         }
       }
     }
 
-    if (totalInvalidos > 10) {
-      logger.error(`  ... y ${totalInvalidos - 10} items invalidos mas`);
+    if (logged >= 10) {
+      logger.error(`  ... mas errores omitidos`);
     }
-    logger.error(`MarketMan CreateChecks: ${totalInvalidos} items invalidos en total`);
+    logger.error(`MarketMan CreateChecks: ${checksInvalidos} checks invalidos, ${itemsInvalidos} items invalidos de ${responseData.Checks.length} checks total`);
+
+    // Si no encontramos errores especificos, loguear muestra de la respuesta
+    if (checksInvalidos === 0 && itemsInvalidos === 0) {
+      logger.error(`MarketMan CreateChecks: no se encontraron errores de validacion especificos`);
+      logger.error(`MarketMan CreateChecks primer check: ${JSON.stringify(responseData.Checks[0]).substring(0, 500)}`);
+    }
   }
 
   /**
