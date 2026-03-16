@@ -1,36 +1,42 @@
-require('dotenv').config();
+const path = require('path');
+const cfg = require(path.join(__dirname, '..', '..', 'config.json'));
+
+// Cargar config.json en process.env para compatibilidad con servicios que usan process.env
+Object.entries(cfg).forEach(([key, value]) => {
+  if (!process.env[key]) process.env[key] = value;
+});
 
 module.exports = {
   // Toteat Configuration
   toteat: {
-    apiUrl: process.env.TOTEAT_API_URL || 'https://toteatdev.appspot.com/mw/or/1.0',
-    apiKey: process.env.TOTEAT_API_KEY,
-    apiUserId: process.env.TOTEAT_API_USER_ID || '1001',
-    restaurantId: process.env.TOTEAT_RESTAURANT_ID,
-    localId: process.env.TOTEAT_LOCAL_ID || '1',
-    environment: process.env.TOTEAT_ENVIRONMENT || 'PROD'
+    apiUrl: cfg.TOTEAT_BASE_URL || 'https://api.toteat.com/mw/or/1.0',
+    apiKey: cfg.TOTEAT_API_KEY,
+    apiUserId: cfg.TOTEAT_USER_ID || '1001',
+    restaurantId: cfg.TOTEAT_RESTAURANT_ID,
+    localId: cfg.TOTEAT_LOCAL_ID || '1',
+    environment: 'PROD'
   },
 
   // Marketman Configuration
   marketman: {
-    apiUrl: process.env.MARKETMAN_API_URL || 'https://api.marketman.com',
-    apiKey: process.env.MARKETMAN_API_KEY,
-    locationId: process.env.MARKETMAN_LOCATION_ID
+    apiUrl: cfg.MARKETMAN_API_URL || 'https://api.marketman.com',
+    apiKey: cfg.MARKETMAN_API_KEY,
+    locationId: cfg.MARKETMAN_LOCATION_ID
   },
 
   // Server Configuration
   server: {
-    port: process.env.PORT || 3000,
-    env: process.env.NODE_ENV || 'development'
+    port: cfg.PORT || 3000,
+    env: cfg.NODE_ENV || 'development'
   },
 
   // Cron Configuration
   cron: {
-    schedule: process.env.CRON_SCHEDULE || '0 6 * * *' // Default: 6 AM daily
+    schedule: cfg.CRON_SCHEDULE || '0 6 * * *'
   },
 
   // Logging Configuration
   logging: {
-    level: process.env.LOG_LEVEL || 'info'
+    level: cfg.LOG_LEVEL || 'info'
   }
 };

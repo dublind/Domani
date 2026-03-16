@@ -19,29 +19,22 @@ class MarketManService {
   sanitizeName(text) {
     if (!text) return '';
     return text
-      // Remover emojis y simbolos unicode (rangos comunes de emojis)
-      .replace(/[\u{1F600}-\u{1F64F}]/gu, '')  // emoticones
-      .replace(/[\u{1F300}-\u{1F5FF}]/gu, '')  // simbolos y pictogramas
-      .replace(/[\u{1F680}-\u{1F6FF}]/gu, '')  // transporte y mapas
-      .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '')  // banderas
-      .replace(/[\u{2600}-\u{26FF}]/gu, '')     // simbolos misc
-      .replace(/[\u{2700}-\u{27BF}]/gu, '')     // dingbats
-      .replace(/[\u{FE00}-\u{FE0F}]/gu, '')     // selectores de variacion
-      .replace(/[\u{200D}]/gu, '')               // zero width joiner
-      .replace(/[\u{20E3}]/gu, '')               // combining enclosing keycap
-      .replace(/[\u{E0020}-\u{E007F}]/gu, '')   // tags
-      .replace(/►/g, '')                          // flecha especial usada en categorias Toteat
-      .replace(/\s+/g, ' ')                       // colapsar espacios multiples
+      // Mantener solo caracteres ASCII seguros: letras, numeros, espacios, puntuacion basica
+      // Incluye letras acentuadas comunes del espanol (á-ú, ñ, Á-Ú, Ñ)
+      .replace(/[^\w\sáéíóúñÁÉÍÓÚÑ&.,;:()/'"-]/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
   /**
    * Limpia el ID de categoria para MarketMan
-   * Remueve caracteres especiales que causan rechazo
+   * Remueve caracteres especiales y normaliza a mayusculas
+   * (Toteat puede enviar "AGREGADOS" y "Agregados" como categorias distintas)
    */
   sanitizeCategoryID(category) {
-    if (!category) return 'General';
-    return this.sanitizeName(category) || 'General';
+    if (!category) return 'GENERAL';
+    const cleaned = this.sanitizeName(category);
+    return cleaned ? cleaned.toUpperCase() : 'GENERAL';
   }
 
   /**
@@ -126,10 +119,12 @@ class MarketManService {
         return { success: false, error: response.data.ErrorMessage, code: response.data.ErrorCode };
       }
 
-      // 1. Registrar categorias
+      // 1. Registrar categorias (REQUERIDO antes de menu items)
       const categoriesResult = await this.syncCategories(productosSanitizados);
       if (!categoriesResult.success) {
-        logger.warn(`MarketMan sync categorias fallo: ${categoriesResult.error}`);
+        logger.error(`MarketMan sync categorias fallo: ${categoriesResult.error}`);
+        logger.error('MarketMan: NO se pueden crear menu items sin categorias registradas');
+        return { success: false, error: `Categorias fallaron: ${categoriesResult.error}` };
       }
 
       // 2. Registrar items del menu (REQUERIDO antes de crear checks)
@@ -140,8 +135,16 @@ class MarketManService {
         return { success: false, error: `Menu items fallaron: ${menuResult.error}` };
       }
 
+      // Filtrar productos cuyos menu items fallaron para no enviarlos en checks
+      let productosParaChecks = productosSanitizados;
+      if (menuResult.invalidItemIDs && menuResult.invalidItemIDs.length > 0) {
+        const invalidSet = new Set(menuResult.invalidItemIDs);
+        productosParaChecks = productosSanitizados.filter(p => !invalidSet.has(String(p.codigo)));
+        logger.info(`MarketMan: ${menuResult.invalidItemIDs.length} items excluidos de checks por ser invalidos en menu`);
+      }
+
       // 3. Crear checks con el detalle de productos (solo si menu items fue exitoso)
-      const checksResult = await this.createChecks(containerID, startDate, productosSanitizados);
+      const checksResult = await this.createChecks(containerID, startDate, productosParaChecks);
       if (checksResult.success) {
         logger.info('MarketMan: ventas subidas correctamente');
       } else {
@@ -224,9 +227,10 @@ class MarketManService {
 
       const productosLista = Object.values(productosAgrupados);
 
-      // Crear un check por producto
+      // Crear un check por producto (timestamp para evitar colision con reintentos)
+      const ts = Date.now();
       const checks = productosLista.map((p, index) => ({
-        CheckPOSID: `${containerID}_${index + 1}`,
+        CheckPOSID: `${containerID}_${ts}_${index + 1}`,
         DateTimeOpenUTC: fromDateUTC,
         DateTimeCloseUTC: toDateUTC,
         Items: [{
@@ -251,11 +255,42 @@ class MarketManService {
       if (response.data.IsSuccess) {
         logger.info('MarketMan: checks creados correctamente');
         return { success: true };
-      } else {
-        // Loguear items invalidos especificamente
-        this.logInvalidChecks(response.data);
-        return { success: false, error: response.data.ErrorMessage };
       }
+
+      const errorMsg = response.data.ErrorMessage || response.data.errorMessage || 'Error desconocido';
+      const errorCode = response.data.ErrorCode || response.data.errorCode || '';
+      logger.error(`MarketMan CreateChecks error: ${errorMsg} (code: ${errorCode})`);
+      this.logInvalidChecks(response.data);
+
+      // Identificar checks invalidos y reintentar sin ellos
+      const invalidCheckIDs = this.findInvalidCheckIDs(response.data);
+      if (invalidCheckIDs.size > 0) {
+        const validChecks = checks.filter(c => !invalidCheckIDs.has(c.CheckPOSID));
+        if (validChecks.length === 0) {
+          logger.error('MarketMan: todos los checks son invalidos');
+          return { success: false, error: errorMsg };
+        }
+
+        logger.info(`MarketMan: reintentando con ${validChecks.length} checks validos (${invalidCheckIDs.size} excluidos)`);
+        const retryResponse = await axios.post(`${BASE_URL}/buyers/pos/CreateChecks`, {
+          BuyerGuid: this.buyerGuid,
+          SalesPeriodContainerID: containerID,
+          Checks: validChecks
+        }, {
+          headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+        });
+
+        if (retryResponse.data.IsSuccess) {
+          logger.info(`MarketMan: checks creados (${validChecks.length}/${checks.length})`);
+          return { success: true };
+        }
+
+        const retryError = retryResponse.data.ErrorMessage || 'Error en reintento';
+        logger.error(`MarketMan: reintento de checks tambien fallo: ${retryError}`);
+        return { success: false, error: retryError };
+      }
+
+      return { success: false, error: errorMsg };
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
@@ -300,7 +335,7 @@ class MarketManService {
 
       if (result.success) {
         logger.info('MarketMan: menu sincronizado correctamente');
-        return { success: true };
+        return { success: true, invalidItemIDs: [] };
       }
 
       // Si fallo, identificar items invalidos y reintentar sin ellos
@@ -313,7 +348,7 @@ class MarketManService {
 
         if (validMenuItems.length === 0) {
           logger.error('MarketMan: todos los items del menu son invalidos');
-          return { success: false, error: 'Todos los items del menu son invalidos' };
+          return { success: false, error: 'Todos los items del menu son invalidos', invalidItemIDs: invalidItems };
         }
 
         logger.info(`MarketMan: reintentando con ${validMenuItems.length} items validos`);
@@ -321,16 +356,18 @@ class MarketManService {
 
         if (retryResult.success) {
           logger.info(`MarketMan: menu sincronizado (${validMenuItems.length}/${menuItems.length} items)`);
-          return { success: true };
+          return { success: true, invalidItemIDs: invalidItems };
         }
 
         logger.error(`MarketMan: reintento tambien fallo: ${retryResult.error}`);
-        return { success: false, error: retryResult.error };
+        return { success: false, error: retryResult.error, invalidItemIDs: invalidItems };
       }
 
       // Si no pudimos identificar items invalidos, intentar en lotes pequenos
       logger.info('MarketMan: intentando envio en lotes de 20 items...');
-      return await this.sendMenuItemsInBatches(token, menuItems, 20);
+      const batchResult = await this.sendMenuItemsInBatches(token, menuItems, 20);
+      batchResult.invalidItemIDs = [];
+      return batchResult;
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
@@ -432,37 +469,89 @@ class MarketManService {
   }
 
   /**
-   * Loguea los checks invalidos para diagnostico
+   * Encuentra los CheckPOSIDs invalidos en la respuesta de CreateChecks
    */
-  logInvalidChecks(responseData) {
-    if (!responseData || !responseData.Checks) {
-      logger.error(`MarketMan CreateChecks error: ${responseData?.ErrorMessage} (sin detalle de checks)`);
-      return;
-    }
+  findInvalidCheckIDs(responseData) {
+    const invalidIDs = new Set();
+    if (!responseData || !responseData.Checks) return invalidIDs;
 
-    let totalInvalidos = 0;
     for (const check of responseData.Checks) {
+      let isInvalid = false;
+
+      if (check.ValidationResult && !check.ValidationResult.IsValid) {
+        isInvalid = true;
+      }
+
       if (check.Items) {
         for (const item of check.Items) {
           if (item.ValidationResult && !item.ValidationResult.IsValid) {
-            totalInvalidos++;
-            if (totalInvalidos <= 10) {
-              logger.error(`  Check invalido: CheckID=${check.CheckPOSID} ItemID=${item.ItemPOSID} Errores: ${JSON.stringify(item.ValidationResult.Errors)}`);
+            isInvalid = true;
+          }
+        }
+      }
+
+      if (isInvalid) {
+        invalidIDs.add(check.CheckPOSID);
+      }
+    }
+    return invalidIDs;
+  }
+
+  /**
+   * Loguea los checks invalidos para diagnostico
+   * Revisa validacion a nivel de Check Y a nivel de Item
+   */
+  logInvalidChecks(responseData) {
+    if (!responseData || !responseData.Checks) {
+      logger.error(`MarketMan CreateChecks: sin detalle de checks en respuesta`);
+      logger.error(`MarketMan CreateChecks respuesta completa: ${JSON.stringify(responseData).substring(0, 3000)}`);
+      return;
+    }
+
+    let checksInvalidos = 0;
+    let itemsInvalidos = 0;
+    let logged = 0;
+
+    for (const check of responseData.Checks) {
+      // Revisar validacion a nivel de CHECK
+      if (check.ValidationResult && !check.ValidationResult.IsValid) {
+        checksInvalidos++;
+        if (logged < 10) {
+          logger.error(`  Check invalido: ID=${check.CheckPOSID} Errores: ${JSON.stringify(check.ValidationResult.Errors)}`);
+          logged++;
+        }
+      }
+
+      // Revisar validacion a nivel de ITEM dentro del check
+      if (check.Items) {
+        for (const item of check.Items) {
+          if (item.ValidationResult && !item.ValidationResult.IsValid) {
+            itemsInvalidos++;
+            if (logged < 10) {
+              logger.error(`  Item invalido en check ${check.CheckPOSID}: ItemID=${item.ItemPOSID} Errores: ${JSON.stringify(item.ValidationResult.Errors)}`);
+              logged++;
             }
           }
         }
       }
     }
 
-    if (totalInvalidos > 10) {
-      logger.error(`  ... y ${totalInvalidos - 10} items invalidos mas`);
+    if (logged >= 10) {
+      logger.error(`  ... mas errores omitidos`);
     }
-    logger.error(`MarketMan CreateChecks: ${totalInvalidos} items invalidos en total`);
+    logger.error(`MarketMan CreateChecks: ${checksInvalidos} checks invalidos, ${itemsInvalidos} items invalidos de ${responseData.Checks.length} checks total`);
+
+    // Si no encontramos errores especificos, loguear muestra de la respuesta
+    if (checksInvalidos === 0 && itemsInvalidos === 0) {
+      logger.error(`MarketMan CreateChecks: no se encontraron errores de validacion especificos`);
+      logger.error(`MarketMan CreateChecks primer check: ${JSON.stringify(responseData.Checks[0]).substring(0, 500)}`);
+    }
   }
 
   /**
    * Crea solo las categorias nuevas en MarketMan
    * Usa nombres sanitizados para evitar rechazos por caracteres especiales
+   * Reintenta una por una si el lote falla
    */
   async syncCategories(products) {
     try {
@@ -476,7 +565,7 @@ class MarketManService {
       const existingIDs = new Set(
         (existingRes.data.POSCategories || []).map(c => c.CategoryPOSID)
       );
-      logger.info(`MarketMan: ${existingIDs.size} categorias ya existen`);
+      logger.info(`MarketMan: ${existingIDs.size} categorias ya existen: ${[...existingIDs].join(', ')}`);
 
       // Solo crear las que no existen (ya sanitizadas en sanitizeProducts)
       const categoriasUnicas = [...new Set(products.map(p => p.categoria || 'General'))];
@@ -491,6 +580,7 @@ class MarketManService {
 
       logger.info(`MarketMan: creando ${nuevas.length} categorias nuevas: ${nuevas.map(c => c.Name).join(', ')}`);
 
+      // Intentar crear todas de una vez
       const response = await axios.post(`${BASE_URL}/buyers/pos/CreatePOSCategories`, {
         BuyerGuid: this.buyerGuid,
         POSCategories: nuevas
@@ -498,16 +588,44 @@ class MarketManService {
 
       if (response.data.IsSuccess) {
         logger.info('MarketMan: nuevas categorias creadas correctamente');
-      } else {
-        logger.warn(`MarketMan CreatePOSCategories: ${response.data.ErrorMessage}`);
+        return { success: true };
       }
 
-      return { success: true };
+      // Si fallo el lote, intentar crear una por una
+      logger.warn(`MarketMan CreatePOSCategories lote fallo: ${response.data.ErrorMessage}. Intentando una por una...`);
+      let creadas = 0;
+      let fallidas = 0;
+
+      for (const cat of nuevas) {
+        try {
+          const r = await axios.post(`${BASE_URL}/buyers/pos/CreatePOSCategories`, {
+            BuyerGuid: this.buyerGuid,
+            POSCategories: [cat]
+          }, { headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' } });
+
+          if (r.data.IsSuccess) {
+            creadas++;
+            logger.info(`MarketMan: categoria "${cat.Name}" creada`);
+          } else if (String(r.data.ErrorCode) === '22' || (r.data.ErrorMessage || '').includes('already exist')) {
+            creadas++;
+            logger.info(`MarketMan: categoria "${cat.Name}" ya existia`);
+          } else {
+            fallidas++;
+            logger.error(`MarketMan: categoria "${cat.Name}" fallo: ${r.data.ErrorMessage}`);
+          }
+        } catch (err) {
+          fallidas++;
+          logger.error(`MarketMan: categoria "${cat.Name}" error: ${err.message}`);
+        }
+      }
+
+      logger.info(`MarketMan: categorias - ${creadas} creadas, ${fallidas} fallidas`);
+      return { success: fallidas === 0, error: fallidas > 0 ? `${fallidas} categorias no se pudieron crear` : null };
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
       logger.error(`MarketMan: error sincronizando categorias: ${msg}`);
-      return { success: true }; // No bloquear el flujo por categorias
+      return { success: false, error: msg };
     }
   }
 

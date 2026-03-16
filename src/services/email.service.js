@@ -1,50 +1,36 @@
-const { Resend } = require('resend');
-const fs = require('fs');
+const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
 class EmailService {
-  constructor() {
-    this.resend = null;
-  }
 
-  /**
-   * Obtiene la configuración de email desde variables de entorno
-   */
-  getConfig() {
-    return {
-      apiKey: process.env.RESEND_API_KEY || '',
-      from: process.env.EMAIL_FROM || 'Domani Ventas <onboarding@resend.dev>',
-      to: process.env.EMAIL_TO || ''
-    };
-  }
+  createTransport() {
+    const host = process.env.SMTP_HOST;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASSWORD;
 
-  /**
-   * Crea el cliente de Resend
-   */
-  createClient() {
-    const config = this.getConfig();
-
-    if (!config.apiKey) {
-      logger.warn('Email no configurado: falta RESEND_API_KEY');
+    if (!host || !user || !pass) {
+      logger.warn('Email no configurado: falta SMTP_HOST, SMTP_USER o SMTP_PASSWORD');
       return null;
     }
 
-    return new Resend(config.apiKey);
+    return nodemailer.createTransport({
+      host,
+      port: parseInt(process.env.SMTP_PORT || '587'),
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: { user, pass }
+    });
   }
 
-  /**
-   * Envía el Excel de ventas por email
-   */
   async sendSalesReport(filePath, dateStr, stats = {}) {
-    const config = this.getConfig();
-    const resend = this.createClient();
+    const transporter = this.createTransport();
 
-    if (!resend) {
-      logger.error('No se puede enviar email: Resend no configurado');
+    if (!transporter) {
+      logger.error('No se puede enviar email: SMTP no configurado');
       return { success: false, error: 'Email no configurado' };
     }
 
-    if (!config.to) {
+    const to = process.env.EMAIL_TO;
+    if (!to) {
       logger.error('No se puede enviar email: falta EMAIL_TO');
       return { success: false, error: 'Destinatario no configurado' };
     }
@@ -54,22 +40,14 @@ class EmailService {
     const fileName = `ventas_domani_${dateStr}.xlsx`;
 
     try {
-      // Leer el archivo y convertir a base64
-      const fileBuffer = fs.readFileSync(filePath);
-      const fileBase64 = fileBuffer.toString('base64');
-
-      // Separar destinatarios
-      const recipients = config.to.split(',').map(e => e.trim());
-
-      const { data, error } = await resend.emails.send({
-        from: config.from,
-        to: recipients,
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+        to: to.split(',').map(e => e.trim()),
         subject: `Ventas Domani - ${formattedDate}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #333;">Reporte de Ventas - Domani Providencia</h2>
             <p>Adjunto encontraras el reporte de ventas del <strong>${formattedDate}</strong>.</p>
-
             <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
               <h3 style="margin-top: 0; color: #555;">Resumen:</h3>
               <ul style="list-style: none; padding: 0;">
@@ -78,28 +56,17 @@ class EmailService {
                 <li><strong>Total con impuesto:</strong> $${(stats.total || 0).toLocaleString('es-CL')}</li>
               </ul>
             </div>
-
             <p style="color: #666; font-size: 12px;">
               Este es un correo automatico generado por el sistema de ventas de Domani.<br>
               El archivo esta en formato compatible con Marketman.
             </p>
           </div>
         `,
-        attachments: [
-          {
-            filename: fileName,
-            content: fileBase64
-          }
-        ]
+        attachments: [{ filename: fileName, path: filePath }]
       });
 
-      if (error) {
-        logger.error('Error enviando email:', error.message);
-        return { success: false, error: error.message };
-      }
-
-      logger.info(`Email enviado exitosamente: ${data.id}`);
-      return { success: true, messageId: data.id };
+      logger.info('Email enviado exitosamente');
+      return { success: true };
 
     } catch (error) {
       logger.error('Error enviando email:', error.message);
@@ -107,40 +74,16 @@ class EmailService {
     }
   }
 
-  /**
-   * Prueba la conexión de email
-   */
   async testConnection() {
-    const config = this.getConfig();
-    const resend = this.createClient();
+    const transporter = this.createTransport();
 
-    if (!resend) {
-      return {
-        success: false,
-        error: 'Resend no configurado',
-        debug: {
-          api_key_set: !!config.apiKey,
-          email_to: config.to
-        }
-      };
+    if (!transporter) {
+      return { success: false, error: 'SMTP no configurado' };
     }
 
     try {
-      // Enviar email de prueba
-      const recipients = config.to ? config.to.split(',').map(e => e.trim()) : ['isalinasg06@gmail.com'];
-
-      const { data, error } = await resend.emails.send({
-        from: config.from,
-        to: recipients,
-        subject: 'Test - Domani Ventas',
-        html: '<p>Conexion de email verificada correctamente.</p>'
-      });
-
-      if (error) {
-        return { success: false, error: error.message };
-      }
-
-      return { success: true, message: 'Email de prueba enviado', messageId: data.id };
+      await transporter.verify();
+      return { success: true, message: 'Conexion SMTP verificada correctamente' };
     } catch (error) {
       return { success: false, error: error.message };
     }
