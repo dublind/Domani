@@ -102,6 +102,7 @@ class MarketManService {
       };
 
       logger.info(`MarketMan: subiendo ventas del ${startDate} al ${endDate || startDate} (${productosSanitizados.length} productos)`);
+      logger.info(`MarketMan: CreateSalesPeriodContainer body: ${JSON.stringify(body)}`);
 
       const response = await axios.post(`${BASE_URL}/buyers/pos/CreateSalesPeriodContainer`, body, {
         headers: {
