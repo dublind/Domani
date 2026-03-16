@@ -117,6 +117,11 @@ class MarketManService {
         logger.info(`MarketMan: container ${containerID} ya existe, continuando con checks`);
       } else {
         logger.error(`MarketMan CreateSalesPeriodContainer error: ${response.data.ErrorMessage} (${response.data.ErrorCode})`);
+        if (String(response.data.ErrorCode) === '13') {
+          logger.error('MarketMan: Error 13 = "Please provide input". Causa probable: BuyerGuid incorrecto.');
+          logger.error(`MarketMan: BuyerGuid actual: ${this.buyerGuid}`);
+          logger.error('MarketMan: Usa /api/marketman/accounts para ver los BuyerGuids validos de tu cuenta');
+        }
         return { success: false, error: response.data.ErrorMessage, code: response.data.ErrorCode };
       }
 
@@ -631,12 +636,95 @@ class MarketManService {
   }
 
   /**
+   * Obtiene las cuentas autorizadas de MarketMan para validar BuyerGuid
+   */
+  async getAuthorisedAccounts() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/partneraccounts/GetAuthorisedAccounts`, {}, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Obtiene los detalles del token incluyendo restaurantes de la cadena.
+   * Para cuentas tipo Chain, devuelve los BuyerGuids de cada restaurante.
+   */
+  async getTokenDetails() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/auth/GetTokenDetails`, {
+      BuyerGuid: this.buyerGuid
+    }, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Valida la configuracion de MarketMan al arrancar.
+   * Para cadenas, descubre los restaurantes y muestra sus BuyerGuids.
+   */
+  async validateBuyerGuid() {
+    if (!this.apiKey || !this.apiPassword) {
+      logger.warn('MarketMan: credenciales no configuradas, no se puede validar BuyerGuid');
+      return false;
+    }
+
+    try {
+      // Obtener detalles del token para ver tipo de cuenta y restaurantes
+      const details = await this.getTokenDetails();
+      logger.info(`MarketMan: Token details: ${JSON.stringify(details)}`);
+
+      const buyerType = details.BuyerType || details.buyerType || '';
+      const buyerTypeID = details.BuyerTypeID || details.buyerTypeID || 0;
+      logger.info(`MarketMan: Tipo de cuenta: ${buyerType} (ID: ${buyerTypeID})`);
+
+      // Si es una cadena (Chain = 2), listar los restaurantes disponibles
+      if (buyerTypeID === 2 || buyerType === 'Chain') {
+        logger.warn('MarketMan: Cuenta tipo CADENA detectada');
+        logger.warn('MarketMan: Para enviar ventas debes usar el BuyerGuid de un RESTAURANTE especifico, no el de la cadena (HQ)');
+
+        // Buscar restaurantes dentro de la cadena
+        const buyers = details.Buyers || details.buyers || details.BuyersInChain || [];
+        if (buyers.length > 0) {
+          logger.info(`MarketMan: ${buyers.length} restaurante(s) en la cadena:`);
+          for (const buyer of buyers) {
+            const guid = buyer.BuyerGuid || buyer.Guid || buyer.buyerGuid || '';
+            const name = buyer.BuyerName || buyer.Name || buyer.buyerName || 'Sin nombre';
+            logger.info(`  - ${name}: BuyerGuid=${guid}`);
+          }
+          logger.warn('MarketMan: Actualiza MARKETMAN_BUYER_GUID con el BuyerGuid del restaurante correcto');
+        } else {
+          logger.info('MarketMan: No se encontraron restaurantes en la respuesta de GetTokenDetails');
+          logger.info('MarketMan: Respuesta completa: ' + JSON.stringify(details));
+        }
+        return false;
+      }
+
+      logger.info('MarketMan: BuyerGuid validado correctamente');
+      return true;
+    } catch (error) {
+      logger.error(`MarketMan: error validando BuyerGuid: ${error.message}`);
+      if (error.response?.data) {
+        logger.error(`MarketMan: respuesta: ${JSON.stringify(error.response.data)}`);
+      }
+      return false;
+    }
+  }
+
+  /**
    * Test de conexion con MarketMan
    */
   async testConnection() {
     try {
       await this.getAccessToken();
-      return { success: true, message: 'Conexion con MarketMan OK' };
+      const buyerValid = await this.validateBuyerGuid();
+      return {
+        success: true,
+        message: 'Conexion con MarketMan OK',
+        buyerGuidValid: buyerValid,
+        buyerGuid: this.buyerGuid
+      };
     } catch (error) {
       return { success: false, error: error.message };
     }
