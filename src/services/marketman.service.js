@@ -117,6 +117,11 @@ class MarketManService {
         logger.info(`MarketMan: container ${containerID} ya existe, continuando con checks`);
       } else {
         logger.error(`MarketMan CreateSalesPeriodContainer error: ${response.data.ErrorMessage} (${response.data.ErrorCode})`);
+        if (String(response.data.ErrorCode) === '13') {
+          logger.error('MarketMan: Error 13 = "Please provide input". Causa probable: BuyerGuid incorrecto.');
+          logger.error(`MarketMan: BuyerGuid actual: ${this.buyerGuid}`);
+          logger.error('MarketMan: Usa /api/marketman/accounts para ver los BuyerGuids validos de tu cuenta');
+        }
         return { success: false, error: response.data.ErrorMessage, code: response.data.ErrorCode };
       }
 
@@ -631,12 +636,71 @@ class MarketManService {
   }
 
   /**
+   * Obtiene las cuentas autorizadas de MarketMan para validar BuyerGuid
+   */
+  async getAuthorisedAccounts() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/partneraccounts/GetAuthorisedAccounts`, {}, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Valida que el BuyerGuid configurado sea correcto.
+   * Si no lo es, muestra los BuyerGuids disponibles para que el usuario corrija.
+   */
+  async validateBuyerGuid() {
+    if (!this.apiKey || !this.apiPassword) {
+      logger.warn('MarketMan: credenciales no configuradas, no se puede validar BuyerGuid');
+      return false;
+    }
+
+    try {
+      const data = await this.getAuthorisedAccounts();
+      const accounts = data.Authorisedaccounts || data.AuthorisedAccounts || [];
+
+      if (accounts.length === 0) {
+        logger.error('MarketMan: no hay cuentas autorizadas para estas credenciales API');
+        return false;
+      }
+
+      logger.info(`MarketMan: ${accounts.length} cuenta(s) autorizada(s) encontrada(s):`);
+      for (const account of accounts) {
+        const guid = account.BuyerGuid || account.buyerGuid;
+        const name = account.BuyerName || account.buyerName || 'Sin nombre';
+        const match = guid === this.buyerGuid ? ' <<< CONFIGURADO' : '';
+        logger.info(`  - ${name}: BuyerGuid=${guid}${match}`);
+      }
+
+      const guids = accounts.map(a => a.BuyerGuid || a.buyerGuid);
+      if (!guids.includes(this.buyerGuid)) {
+        logger.error(`MarketMan: BuyerGuid configurado (${this.buyerGuid}) NO coincide con ninguna cuenta autorizada`);
+        logger.error(`MarketMan: DEBES actualizar MARKETMAN_BUYER_GUID con uno de los valores de arriba`);
+        return false;
+      }
+
+      logger.info('MarketMan: BuyerGuid validado correctamente');
+      return true;
+    } catch (error) {
+      logger.error(`MarketMan: error validando BuyerGuid: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Test de conexion con MarketMan
    */
   async testConnection() {
     try {
       await this.getAccessToken();
-      return { success: true, message: 'Conexion con MarketMan OK' };
+      const buyerValid = await this.validateBuyerGuid();
+      return {
+        success: true,
+        message: 'Conexion con MarketMan OK',
+        buyerGuidValid: buyerValid,
+        buyerGuid: this.buyerGuid
+      };
     } catch (error) {
       return { success: false, error: error.message };
     }

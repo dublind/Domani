@@ -555,6 +555,11 @@ app.listen(PORT, () => {
   // Iniciar tareas programadas
   schedulerService.start();
   logger.info('Exportacion automatica programada: 8:00 AM Chile');
+
+  // Validar BuyerGuid de MarketMan al arrancar
+  marketmanService.validateBuyerGuid().catch(err => {
+    logger.error(`MarketMan: error en validacion inicial: ${err.message}`);
+  });
 });
 
 // Manejo de errores no capturados
