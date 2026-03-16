@@ -647,8 +647,22 @@ class MarketManService {
   }
 
   /**
-   * Valida que el BuyerGuid configurado sea correcto.
-   * Si no lo es, muestra los BuyerGuids disponibles para que el usuario corrija.
+   * Obtiene los detalles del token incluyendo restaurantes de la cadena.
+   * Para cuentas tipo Chain, devuelve los BuyerGuids de cada restaurante.
+   */
+  async getTokenDetails() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/auth/GetTokenDetails`, {
+      BuyerGuid: this.buyerGuid
+    }, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Valida la configuracion de MarketMan al arrancar.
+   * Para cadenas, descubre los restaurantes y muestra sus BuyerGuids.
    */
   async validateBuyerGuid() {
     if (!this.apiKey || !this.apiPassword) {
@@ -657,26 +671,33 @@ class MarketManService {
     }
 
     try {
-      const data = await this.getAuthorisedAccounts();
-      const accounts = data.Authorisedaccounts || data.AuthorisedAccounts || [];
+      // Obtener detalles del token para ver tipo de cuenta y restaurantes
+      const details = await this.getTokenDetails();
+      logger.info(`MarketMan: Token details: ${JSON.stringify(details)}`);
 
-      if (accounts.length === 0) {
-        logger.error('MarketMan: no hay cuentas autorizadas para estas credenciales API');
-        return false;
-      }
+      const buyerType = details.BuyerType || details.buyerType || '';
+      const buyerTypeID = details.BuyerTypeID || details.buyerTypeID || 0;
+      logger.info(`MarketMan: Tipo de cuenta: ${buyerType} (ID: ${buyerTypeID})`);
 
-      logger.info(`MarketMan: ${accounts.length} cuenta(s) autorizada(s) encontrada(s):`);
-      for (const account of accounts) {
-        const guid = account.BuyerGuid || account.buyerGuid;
-        const name = account.BuyerName || account.buyerName || 'Sin nombre';
-        const match = guid === this.buyerGuid ? ' <<< CONFIGURADO' : '';
-        logger.info(`  - ${name}: BuyerGuid=${guid}${match}`);
-      }
+      // Si es una cadena (Chain = 2), listar los restaurantes disponibles
+      if (buyerTypeID === 2 || buyerType === 'Chain') {
+        logger.warn('MarketMan: Cuenta tipo CADENA detectada');
+        logger.warn('MarketMan: Para enviar ventas debes usar el BuyerGuid de un RESTAURANTE especifico, no el de la cadena (HQ)');
 
-      const guids = accounts.map(a => a.BuyerGuid || a.buyerGuid);
-      if (!guids.includes(this.buyerGuid)) {
-        logger.error(`MarketMan: BuyerGuid configurado (${this.buyerGuid}) NO coincide con ninguna cuenta autorizada`);
-        logger.error(`MarketMan: DEBES actualizar MARKETMAN_BUYER_GUID con uno de los valores de arriba`);
+        // Buscar restaurantes dentro de la cadena
+        const buyers = details.Buyers || details.buyers || details.BuyersInChain || [];
+        if (buyers.length > 0) {
+          logger.info(`MarketMan: ${buyers.length} restaurante(s) en la cadena:`);
+          for (const buyer of buyers) {
+            const guid = buyer.BuyerGuid || buyer.Guid || buyer.buyerGuid || '';
+            const name = buyer.BuyerName || buyer.Name || buyer.buyerName || 'Sin nombre';
+            logger.info(`  - ${name}: BuyerGuid=${guid}`);
+          }
+          logger.warn('MarketMan: Actualiza MARKETMAN_BUYER_GUID con el BuyerGuid del restaurante correcto');
+        } else {
+          logger.info('MarketMan: No se encontraron restaurantes en la respuesta de GetTokenDetails');
+          logger.info('MarketMan: Respuesta completa: ' + JSON.stringify(details));
+        }
         return false;
       }
 
@@ -684,6 +705,9 @@ class MarketManService {
       return true;
     } catch (error) {
       logger.error(`MarketMan: error validando BuyerGuid: ${error.message}`);
+      if (error.response?.data) {
+        logger.error(`MarketMan: respuesta: ${JSON.stringify(error.response.data)}`);
+      }
       return false;
     }
   }

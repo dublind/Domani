@@ -465,17 +465,16 @@ app.get('/api/marketman/test', async (req, res) => {
   }
 });
 
-// MarketMan: obtener cuentas autorizadas (para ver el BuyerGuid)
+// MarketMan: obtener cuentas autorizadas y restaurantes de la cadena
 app.get('/api/marketman/accounts', async (req, res) => {
   try {
-    const axios = require('axios');
-    const token = await marketmanService.getAccessToken();
-    const response = await axios.post(
-      'https://api.marketman.com/v3/buyers/partneraccounts/GetAuthorisedAccounts',
-      {},
-      { headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' } }
-    );
-    res.json(response.data);
+    const accounts = await marketmanService.getAuthorisedAccounts();
+    const tokenDetails = await marketmanService.getTokenDetails();
+    res.json({
+      accounts,
+      tokenDetails,
+      currentBuyerGuid: process.env.MARKETMAN_BUYER_GUID
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
