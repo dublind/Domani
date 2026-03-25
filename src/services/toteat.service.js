@@ -260,6 +260,8 @@ class ToteatService {
 
       const response = await axios.get(url, { timeout: 30000 });
 
+      logger.info(`Toteat response status: ${response.status}, ok: ${response.data?.ok}, keys: ${Object.keys(response.data || {}).join(',')}`);
+
       if (response.data && response.data.data) {
         const data = response.data.data;
         logger.info(`Ventas obtenidas: ${Array.isArray(data) ? data.length : 0} ordenes`);
@@ -270,11 +272,22 @@ class ToteatService {
         };
       }
 
-      return { success: false, message: 'No se encontraron ventas' };
+      // Capturar el mensaje real de error de Toteat
+      const errorMsg = response.data?.msg?.texto
+        || response.data?.message
+        || response.data?.error
+        || JSON.stringify(response.data)
+        || 'No se encontraron ventas';
+
+      logger.warn(`Toteat sin datos: ${errorMsg}`);
+      return { success: false, message: errorMsg };
 
     } catch (err) {
-      logger.error(`Error obteniendo ventas: ${err.message}`);
-      return { success: false, message: err.message };
+      const status = err.response?.status;
+      const apiMsg = err.response?.data?.msg?.texto || err.response?.data?.message || err.response?.data?.error;
+      const fullMsg = status ? `HTTP ${status}${apiMsg ? ': ' + apiMsg : ''}` : err.message;
+      logger.error(`Error obteniendo ventas: ${fullMsg}`);
+      return { success: false, message: fullMsg };
     }
   }
 
