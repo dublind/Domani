@@ -19,7 +19,7 @@ function getLocations() {
         token: process.env[`LOC${i}_TOTEAT_TOKEN`],
         restaurantId: process.env[`LOC${i}_TOTEAT_RESTAURANT_ID`],
         localId: process.env[`LOC${i}_TOTEAT_LOCAL_ID`] || '1',
-        userId: '1001',
+        userId: process.env[`LOC${i}_TOTEAT_USER_ID`] || '1001',
         baseUrl: 'https://api.toteat.com/mw/or/1.0'
       },
       marketman: {
