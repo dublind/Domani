@@ -15,6 +15,9 @@ data/uploads/
 uploads/
 data/*.csv
 
+# Configuración con credenciales (nunca subir)
+config.json
+
 # Archivos temporales
 *.tmp
 *.temp
