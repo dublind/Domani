@@ -1,17 +1,16 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-// Configuracion API Toteat
-// URL de produccion (cambiar a toteatdev si es desarrollo)
-const TOTEAT_CONFIG = {
-  baseUrl: process.env.TOTEAT_BASE_URL || 'https://api.toteat.com/mw/or/1.0',
-  token: process.env.TOTEAT_TOKEN || 'C92Q8x9bq6Ix5QJWIQsvravh7Q1la7Np',
-  restaurantId: process.env.TOTEAT_RESTAURANT_ID || '6512174172209152',
-  localId: process.env.TOTEAT_LOCAL_ID || '1',
-  userId: process.env.TOTEAT_USER_ID || '1001'
-};
-
 class ToteatService {
+  constructor(config = {}) {
+    this.config = {
+      baseUrl: config.baseUrl || 'https://api.toteat.com/mw/or/1.0',
+      token: config.token || process.env.LOC1_TOTEAT_TOKEN || 'C92Q8x9bq6Ix5QJWIQsvravh7Q1la7Np',
+      restaurantId: config.restaurantId || process.env.LOC1_TOTEAT_RESTAURANT_ID || '6512174172209152',
+      localId: config.localId || process.env.LOC1_TOTEAT_LOCAL_ID || '1',
+      userId: config.userId || '1001'
+    };
+  }
   /**
    * Obtiene la recaudacion de un dia desde la API de Toteat
    * @param {Date|string} date - Fecha a consultar
@@ -26,7 +25,7 @@ class ToteatService {
 
     try {
       // Todos los parametros van como query params segun documentacion Toteat
-      const url = `${TOTEAT_CONFIG.baseUrl}/collection?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&date=${dateStr}`;
+      const url = `${this.config.baseUrl}/collection?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&date=${dateStr}`;
 
       logger.info(`URL: ${url}`);
 
@@ -217,7 +216,7 @@ class ToteatService {
 
     for (const ep of candidates) {
       try {
-        const url = `${TOTEAT_CONFIG.baseUrl}/${ep}?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&date=${dateStr}`;
+        const url = `${this.config.baseUrl}/${ep}?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&date=${dateStr}`;
         logger.info(`Intentando endpoint alternativo: ${url}`);
         const resp = await axios.get(url, { timeout: 20000 });
         if (resp.data && resp.data.ok && resp.data.data) {
@@ -255,7 +254,7 @@ class ToteatService {
     logger.info(`Consultando ventas de Toteat para rango: ${startStr} - ${endStr}`);
 
     try {
-      const url = `${TOTEAT_CONFIG.baseUrl}/sales?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&ini=${startStr}&end=${endStr}`;
+      const url = `${this.config.baseUrl}/sales?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&ini=${startStr}&end=${endStr}`;
 
       logger.info(`URL sales: ${url}`);
 
@@ -379,7 +378,7 @@ class ToteatService {
 
     for (const ep of endpoints) {
       try {
-        const url = `${TOTEAT_CONFIG.baseUrl}/${ep}?xir=${TOTEAT_CONFIG.restaurantId}&xil=${TOTEAT_CONFIG.localId}&xiu=${TOTEAT_CONFIG.userId}&xapitoken=${TOTEAT_CONFIG.token}&date=${dateStr}`;
+        const url = `${this.config.baseUrl}/${ep}?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&date=${dateStr}`;
 
         const response = await axios.get(url, { timeout: 15000 });
 

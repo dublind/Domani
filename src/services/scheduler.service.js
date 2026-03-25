@@ -2,10 +2,11 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
-const toteatService = require('./toteat.service');
+const ToteatService = require('./toteat.service');
 const emailService = require('./email.service');
 const marketmanService = require('./marketman.service');
 const logger = require('../utils/logger');
+const { getLocations } = require('../config/locations');
 
 class SchedulerService {
   constructor() {
@@ -43,35 +44,50 @@ class SchedulerService {
    * Exporta las ventas del día anterior a Excel
    */
   async exportYesterdaySales() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dateStr = yesterday.toISOString().split('T')[0];
+
+    logger.info(`Exportando ventas del ${dateStr} para todos los restaurantes...`);
+
+    const locations = getLocations();
+    if (locations.length === 0) {
+      logger.error('No hay restaurantes configurados en el .env');
+      return { success: false, error: 'No hay restaurantes configurados' };
+    }
+
+    const results = [];
+    for (const location of locations) {
+      logger.info(`=== Procesando: ${location.name} ===`);
+      const result = await this.exportLocationSales(location, dateStr);
+      results.push({ location: location.name, ...result });
+    }
+
+    return { success: true, results };
+  }
+
+  /**
+   * Exporta las ventas de un restaurante específico para una fecha
+   */
+  async exportLocationSales(location, dateStr) {
     try {
-      // Calcular fecha de ayer
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const dateStr = yesterday.toISOString().split('T')[0];
-
-      logger.info(`Exportando ventas del ${dateStr}...`);
-
-      // Obtener ventas de Toteat
+      const toteatService = new ToteatService(location.toteat);
       const result = await toteatService.getSales(dateStr);
 
       if (!result.success) {
-        logger.error(`Error obteniendo ventas: ${result.message}`);
+        logger.error(`[${location.name}] Error obteniendo ventas: ${result.message}`);
         return { success: false, error: result.message };
       }
 
       if (!result.data || result.data.length === 0) {
-        logger.warn(`No hay ventas para exportar del ${dateStr}`);
+        logger.warn(`[${location.name}] No hay ventas para el ${dateStr}`);
         return { success: false, error: 'No hay ventas para esta fecha' };
       }
 
-      // Parsear ventas a productos
       const products = toteatService.parseSalesToProducts(result.data);
-
-      // Calcular totales
       const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
       const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
 
-      // Agrupar por categoría
       const porCategoria = {};
       products.forEach(p => {
         if (!porCategoria[p.categoria]) {
@@ -82,39 +98,37 @@ class SchedulerService {
         porCategoria[p.categoria].totalConIva += p.ventaConImpuesto;
       });
 
-      // Generar Excel
       const filePath = await this.generateExcel(dateStr, products, porCategoria, {
         totalSinImpuesto,
         totalConImpuesto,
         ordenes: result.data.length
-      });
+      }, null, location.name);
 
-      logger.info(`Excel exportado exitosamente: ${filePath}`);
+      logger.info(`[${location.name}] Excel exportado: ${filePath}`);
 
-      // Subir ventas a MarketMan
-      const marketmanResult = await marketmanService.uploadSales(dateStr, dateStr, products, {
-        totalSinImpuesto,
-        totalConImpuesto
-      });
-
-      if (marketmanResult.success) {
-        logger.info('Ventas subidas a MarketMan correctamente');
+      // Subir a MarketMan si tiene BuyerGuid configurado
+      let marketmanUploaded = false;
+      if (location.marketman.buyerGuid) {
+        const marketmanResult = await marketmanService.uploadSales(
+          dateStr, dateStr, products,
+          { totalSinImpuesto, totalConImpuesto },
+          location.marketman.buyerGuid
+        );
+        marketmanUploaded = marketmanResult.success;
+        if (marketmanUploaded) {
+          logger.info(`[${location.name}] Ventas subidas a MarketMan`);
+        } else {
+          logger.warn(`[${location.name}] MarketMan upload falló: ${marketmanResult.error}`);
+        }
       } else {
-        logger.warn(`MarketMan upload falló: ${marketmanResult.error}`);
+        logger.info(`[${location.name}] Sin BuyerGuid de MarketMan, se omite upload`);
       }
 
-      // Enviar por email
       const emailResult = await emailService.sendSalesReport(filePath, dateStr, {
         productos: products.length,
         ordenes: result.data.length,
         total: totalConImpuesto
       });
-
-      if (emailResult.success) {
-        logger.info(`Email enviado exitosamente`);
-      } else {
-        logger.warn(`No se pudo enviar email: ${emailResult.error}`);
-      }
 
       return {
         success: true,
@@ -123,11 +137,11 @@ class SchedulerService {
         ordenes: result.data.length,
         total: totalConImpuesto,
         emailSent: emailResult.success,
-        marketmanUploaded: marketmanResult.success
+        marketmanUploaded
       };
 
     } catch (error) {
-      logger.error('Error en exportación automática:', error);
+      logger.error(`[${location.name}] Error en exportación:`, error);
       return { success: false, error: error.message };
     }
   }
@@ -137,7 +151,7 @@ class SchedulerService {
    * @param {string} startDate - Fecha inicio (YYYY-MM-DD)
    * @param {string} endDate - Fecha fin (YYYY-MM-DD), opcional
    */
-  async generateExcel(startDate, products, porCategoria, totales, endDate = null) {
+  async generateExcel(startDate, products, porCategoria, totales, endDate = null, locationName = 'Domani') {
     const formatDate = (d) => { const [y, m, dd] = d.split('-'); return `${dd}/${m}/${y}`; };
     const formattedStart = formatDate(startDate);
     const formattedEnd = endDate ? formatDate(endDate) : formattedStart;
@@ -168,7 +182,7 @@ class SchedulerService {
 
     // Formato Marketman
     const data = [
-      ['Location name', 'Domani Providencia'],
+      ['Location name', locationName],
       ['Begin date', formattedStart],
       ['End date', formattedEnd],
       ['Total revenue excl. tax', totales.totalSinImpuesto],
@@ -224,6 +238,10 @@ class SchedulerService {
   async runRangeExport(startDate, endDate) {
     logger.info(`Exportación de rango: ${startDate} a ${endDate}`);
 
+    const locations = getLocations();
+    const location = locations[0]; // Usa el primer restaurante por defecto
+    const toteatService = new ToteatService(location ? location.toteat : {});
+
     const result = await toteatService.getSales(startDate, endDate);
 
     if (!result.success) {
@@ -268,9 +286,12 @@ class SchedulerService {
    */
   async runManualExport(date = null) {
     if (date) {
-      // Exportar fecha específica
       const dateStr = date;
       logger.info(`Exportación manual para fecha: ${dateStr}`);
+
+      const locations = getLocations();
+      const location = locations[0];
+      const toteatService = new ToteatService(location ? location.toteat : {});
 
       const result = await toteatService.getSales(dateStr);
 

@@ -68,8 +68,12 @@ class MarketManService {
    * @param {Array} products - Productos parseados de Toteat
    * @param {Object} totales - { totalSinImpuesto, totalConImpuesto }
    */
-  async uploadSales(startDate, endDate, products, totales) {
+  async uploadSales(startDate, endDate, products, totales, buyerGuidOverride = null) {
+    const originalBuyerGuid = this.buyerGuid;
+    if (buyerGuidOverride) this.buyerGuid = buyerGuidOverride;
+
     if (!this.apiKey || !this.apiPassword || !this.buyerGuid) {
+      this.buyerGuid = originalBuyerGuid;
       logger.warn('MarketMan: credenciales no configuradas, se omite upload');
       return { success: false, error: 'Credenciales de MarketMan no configuradas' };
     }
@@ -157,9 +161,11 @@ class MarketManService {
         logger.warn(`MarketMan checks fallaron: ${checksResult.error}`);
       }
 
+      this.buyerGuid = originalBuyerGuid;
       return { success: checksResult.success, containerID };
 
     } catch (error) {
+      this.buyerGuid = originalBuyerGuid;
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
       logger.error(`MarketMan: error en upload: ${msg}`);
       return { success: false, error: msg };
