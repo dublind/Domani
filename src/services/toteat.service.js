@@ -403,4 +403,4 @@ class ToteatService {
   }
 }
 
-module.exports = new ToteatService();
+module.exports = ToteatService;
