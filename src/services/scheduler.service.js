@@ -234,12 +234,16 @@ class SchedulerService {
 
   /**
    * Exporta ventas de un rango de fechas a Excel
+   * @param {string} startDate
+   * @param {string} endDate
+   * @param {string|number} locIndex - índice de restaurante (1-based), opcional
    */
-  async runRangeExport(startDate, endDate) {
+  async runRangeExport(startDate, endDate, locIndex = 1) {
     logger.info(`Exportación de rango: ${startDate} a ${endDate}`);
 
     const locations = getLocations();
-    const location = locations[0]; // Usa el primer restaurante por defecto
+    const idx = Math.max(0, Math.min(parseInt(locIndex, 10) - 1, locations.length - 1));
+    const location = locations[idx];
     const toteatService = new ToteatService(location ? location.toteat : {});
 
     const result = await toteatService.getSales(startDate, endDate);
