@@ -102,6 +102,7 @@ class MarketManService {
       };
 
       logger.info(`MarketMan: subiendo ventas del ${startDate} al ${endDate || startDate} (${productosSanitizados.length} productos)`);
+      logger.info(`MarketMan: CreateSalesPeriodContainer body: ${JSON.stringify(body)}`);
 
       const response = await axios.post(`${BASE_URL}/buyers/pos/CreateSalesPeriodContainer`, body, {
         headers: {
@@ -116,6 +117,11 @@ class MarketManService {
         logger.info(`MarketMan: container ${containerID} ya existe, continuando con checks`);
       } else {
         logger.error(`MarketMan CreateSalesPeriodContainer error: ${response.data.ErrorMessage} (${response.data.ErrorCode})`);
+        if (String(response.data.ErrorCode) === '13') {
+          logger.error('MarketMan: Error 13 = "Please provide input". Causa probable: BuyerGuid incorrecto.');
+          logger.error(`MarketMan: BuyerGuid actual: ${this.buyerGuid}`);
+          logger.error('MarketMan: Usa /api/marketman/accounts para ver los BuyerGuids validos de tu cuenta');
+        }
         return { success: false, error: response.data.ErrorMessage, code: response.data.ErrorCode };
       }
 
@@ -135,8 +141,16 @@ class MarketManService {
         return { success: false, error: `Menu items fallaron: ${menuResult.error}` };
       }
 
+      // Filtrar productos cuyos menu items fallaron para no enviarlos en checks
+      let productosParaChecks = productosSanitizados;
+      if (menuResult.invalidItemIDs && menuResult.invalidItemIDs.length > 0) {
+        const invalidSet = new Set(menuResult.invalidItemIDs);
+        productosParaChecks = productosSanitizados.filter(p => !invalidSet.has(String(p.codigo)));
+        logger.info(`MarketMan: ${menuResult.invalidItemIDs.length} items excluidos de checks por ser invalidos en menu`);
+      }
+
       // 3. Crear checks con el detalle de productos (solo si menu items fue exitoso)
-      const checksResult = await this.createChecks(containerID, startDate, productosSanitizados);
+      const checksResult = await this.createChecks(containerID, startDate, productosParaChecks);
       if (checksResult.success) {
         logger.info('MarketMan: ventas subidas correctamente');
       } else {
@@ -247,13 +261,42 @@ class MarketManService {
       if (response.data.IsSuccess) {
         logger.info('MarketMan: checks creados correctamente');
         return { success: true };
-      } else {
-        const errorMsg = response.data.ErrorMessage || response.data.errorMessage || 'Error desconocido';
-        const errorCode = response.data.ErrorCode || response.data.errorCode || '';
-        logger.error(`MarketMan CreateChecks error: ${errorMsg} (code: ${errorCode})`);
-        this.logInvalidChecks(response.data);
-        return { success: false, error: errorMsg };
       }
+
+      const errorMsg = response.data.ErrorMessage || response.data.errorMessage || 'Error desconocido';
+      const errorCode = response.data.ErrorCode || response.data.errorCode || '';
+      logger.error(`MarketMan CreateChecks error: ${errorMsg} (code: ${errorCode})`);
+      this.logInvalidChecks(response.data);
+
+      // Identificar checks invalidos y reintentar sin ellos
+      const invalidCheckIDs = this.findInvalidCheckIDs(response.data);
+      if (invalidCheckIDs.size > 0) {
+        const validChecks = checks.filter(c => !invalidCheckIDs.has(c.CheckPOSID));
+        if (validChecks.length === 0) {
+          logger.error('MarketMan: todos los checks son invalidos');
+          return { success: false, error: errorMsg };
+        }
+
+        logger.info(`MarketMan: reintentando con ${validChecks.length} checks validos (${invalidCheckIDs.size} excluidos)`);
+        const retryResponse = await axios.post(`${BASE_URL}/buyers/pos/CreateChecks`, {
+          BuyerGuid: this.buyerGuid,
+          SalesPeriodContainerID: containerID,
+          Checks: validChecks
+        }, {
+          headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+        });
+
+        if (retryResponse.data.IsSuccess) {
+          logger.info(`MarketMan: checks creados (${validChecks.length}/${checks.length})`);
+          return { success: true };
+        }
+
+        const retryError = retryResponse.data.ErrorMessage || 'Error en reintento';
+        logger.error(`MarketMan: reintento de checks tambien fallo: ${retryError}`);
+        return { success: false, error: retryError };
+      }
+
+      return { success: false, error: errorMsg };
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
@@ -298,7 +341,7 @@ class MarketManService {
 
       if (result.success) {
         logger.info('MarketMan: menu sincronizado correctamente');
-        return { success: true };
+        return { success: true, invalidItemIDs: [] };
       }
 
       // Si fallo, identificar items invalidos y reintentar sin ellos
@@ -311,7 +354,7 @@ class MarketManService {
 
         if (validMenuItems.length === 0) {
           logger.error('MarketMan: todos los items del menu son invalidos');
-          return { success: false, error: 'Todos los items del menu son invalidos' };
+          return { success: false, error: 'Todos los items del menu son invalidos', invalidItemIDs: invalidItems };
         }
 
         logger.info(`MarketMan: reintentando con ${validMenuItems.length} items validos`);
@@ -319,16 +362,18 @@ class MarketManService {
 
         if (retryResult.success) {
           logger.info(`MarketMan: menu sincronizado (${validMenuItems.length}/${menuItems.length} items)`);
-          return { success: true };
+          return { success: true, invalidItemIDs: invalidItems };
         }
 
         logger.error(`MarketMan: reintento tambien fallo: ${retryResult.error}`);
-        return { success: false, error: retryResult.error };
+        return { success: false, error: retryResult.error, invalidItemIDs: invalidItems };
       }
 
       // Si no pudimos identificar items invalidos, intentar en lotes pequenos
       logger.info('MarketMan: intentando envio en lotes de 20 items...');
-      return await this.sendMenuItemsInBatches(token, menuItems, 20);
+      const batchResult = await this.sendMenuItemsInBatches(token, menuItems, 20);
+      batchResult.invalidItemIDs = [];
+      return batchResult;
 
     } catch (error) {
       const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
@@ -427,6 +472,35 @@ class MarketManService {
     for (const item of invalidos) {
       logger.error(`  Item invalido: ID=${item.ItemPOSID} Name="${item.Name}" Cat="${item.CategoryPOSID}" Errores: ${JSON.stringify(item.ValidationResult.Errors)}`);
     }
+  }
+
+  /**
+   * Encuentra los CheckPOSIDs invalidos en la respuesta de CreateChecks
+   */
+  findInvalidCheckIDs(responseData) {
+    const invalidIDs = new Set();
+    if (!responseData || !responseData.Checks) return invalidIDs;
+
+    for (const check of responseData.Checks) {
+      let isInvalid = false;
+
+      if (check.ValidationResult && !check.ValidationResult.IsValid) {
+        isInvalid = true;
+      }
+
+      if (check.Items) {
+        for (const item of check.Items) {
+          if (item.ValidationResult && !item.ValidationResult.IsValid) {
+            isInvalid = true;
+          }
+        }
+      }
+
+      if (isInvalid) {
+        invalidIDs.add(check.CheckPOSID);
+      }
+    }
+    return invalidIDs;
   }
 
   /**
@@ -562,12 +636,95 @@ class MarketManService {
   }
 
   /**
+   * Obtiene las cuentas autorizadas de MarketMan para validar BuyerGuid
+   */
+  async getAuthorisedAccounts() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/partneraccounts/GetAuthorisedAccounts`, {}, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Obtiene los detalles del token incluyendo restaurantes de la cadena.
+   * Para cuentas tipo Chain, devuelve los BuyerGuids de cada restaurante.
+   */
+  async getTokenDetails() {
+    const token = await this.getAccessToken();
+    const response = await axios.post(`${BASE_URL}/buyers/auth/GetTokenDetails`, {
+      BuyerGuid: this.buyerGuid
+    }, {
+      headers: { AUTH_TOKEN: token, 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+
+  /**
+   * Valida la configuracion de MarketMan al arrancar.
+   * Para cadenas, descubre los restaurantes y muestra sus BuyerGuids.
+   */
+  async validateBuyerGuid() {
+    if (!this.apiKey || !this.apiPassword) {
+      logger.warn('MarketMan: credenciales no configuradas, no se puede validar BuyerGuid');
+      return false;
+    }
+
+    try {
+      // Obtener detalles del token para ver tipo de cuenta y restaurantes
+      const details = await this.getTokenDetails();
+      logger.info(`MarketMan: Token details: ${JSON.stringify(details)}`);
+
+      const buyerType = details.BuyerType || details.buyerType || '';
+      const buyerTypeID = details.BuyerTypeID || details.buyerTypeID || 0;
+      logger.info(`MarketMan: Tipo de cuenta: ${buyerType} (ID: ${buyerTypeID})`);
+
+      // Si es una cadena (Chain = 2), listar los restaurantes disponibles
+      if (buyerTypeID === 2 || buyerType === 'Chain') {
+        logger.warn('MarketMan: Cuenta tipo CADENA detectada');
+        logger.warn('MarketMan: Para enviar ventas debes usar el BuyerGuid de un RESTAURANTE especifico, no el de la cadena (HQ)');
+
+        // Buscar restaurantes dentro de la cadena
+        const buyers = details.Buyers || details.buyers || details.BuyersInChain || [];
+        if (buyers.length > 0) {
+          logger.info(`MarketMan: ${buyers.length} restaurante(s) en la cadena:`);
+          for (const buyer of buyers) {
+            const guid = buyer.BuyerGuid || buyer.Guid || buyer.buyerGuid || '';
+            const name = buyer.BuyerName || buyer.Name || buyer.buyerName || 'Sin nombre';
+            logger.info(`  - ${name}: BuyerGuid=${guid}`);
+          }
+          logger.warn('MarketMan: Actualiza MARKETMAN_BUYER_GUID con el BuyerGuid del restaurante correcto');
+        } else {
+          logger.info('MarketMan: No se encontraron restaurantes en la respuesta de GetTokenDetails');
+          logger.info('MarketMan: Respuesta completa: ' + JSON.stringify(details));
+        }
+        return false;
+      }
+
+      logger.info('MarketMan: BuyerGuid validado correctamente');
+      return true;
+    } catch (error) {
+      logger.error(`MarketMan: error validando BuyerGuid: ${error.message}`);
+      if (error.response?.data) {
+        logger.error(`MarketMan: respuesta: ${JSON.stringify(error.response.data)}`);
+      }
+      return false;
+    }
+  }
+
+  /**
    * Test de conexion con MarketMan
    */
   async testConnection() {
     try {
       await this.getAccessToken();
-      return { success: true, message: 'Conexion con MarketMan OK' };
+      const buyerValid = await this.validateBuyerGuid();
+      return {
+        success: true,
+        message: 'Conexion con MarketMan OK',
+        buyerGuidValid: buyerValid,
+        buyerGuid: this.buyerGuid
+      };
     } catch (error) {
       return { success: false, error: error.message };
     }
