@@ -41,7 +41,9 @@ class SchedulerService {
   }
 
   /**
-   * Exporta las ventas del día anterior a Excel
+   * Exporta las ventas del día anterior para todos los restaurantes configurados.
+   * Es invocada automáticamente por el cron diario a las 8:00 AM (Chile).
+   * @returns {{ success: boolean, results: Array }} Resultado por restaurante
    */
   async exportYesterdaySales() {
     const yesterday = new Date();
@@ -57,34 +59,62 @@ class SchedulerService {
     }
 
     const results = [];
-    for (const location of locations) {
+    for (let i = 0; i < locations.length; i++) {
+      const location = locations[i];
       logger.info(`=== Procesando: ${location.name} ===`);
       const result = await this.exportLocationSales(location, dateStr);
       results.push({ location: location.name, ...result });
+
+      // Pausa de 90 segundos entre restaurantes para respetar el rate limit de Toteat (1 req/min)
+      if (i < locations.length - 1) {
+        logger.info(`Esperando 90 segundos antes del siguiente restaurante...`);
+        await new Promise(resolve => setTimeout(resolve, 90000));
+      }
     }
 
     return { success: true, results };
   }
 
   /**
-   * Exporta las ventas de un restaurante específico para una fecha
+   * Exporta las ventas de un restaurante específico para una fecha.
+   * Intenta el endpoint /sales primero; si no retorna datos, cae a /collection.
+   * Genera el Excel, sube a MarketMan (si tiene BuyerGuid) y envía el email.
+   * @param {{ name: string, toteat: object, marketman: { buyerGuid: string|null } }} location
+   * @param {string} dateStr - Fecha en formato YYYY-MM-DD
+   * @returns {{ success: boolean, filePath?: string, productos?: number, ordenes?: number, total?: number, emailSent?: boolean, marketmanUploaded?: boolean, error?: string }}
    */
   async exportLocationSales(location, dateStr) {
     try {
       const toteatService = new ToteatService(location.toteat);
-      const result = await toteatService.getSales(dateStr);
 
-      if (!result.success) {
-        logger.error(`[${location.name}] Error obteniendo ventas: ${result.message}`);
-        return { success: false, error: result.message };
+      // Intentar /sales primero; si falla, usar /collection como fallback
+      let products = null;
+      let ordenesCount = 0;
+      const salesResult = await toteatService.getSales(dateStr);
+
+      if (salesResult.success && salesResult.data && salesResult.data.length > 0) {
+        logger.info(`[${location.name}] Usando endpoint /sales`);
+        products = toteatService.parseSalesToProducts(salesResult.data);
+        ordenesCount = salesResult.data.length;
+      } else {
+        logger.info(`[${location.name}] /sales falló (${salesResult.message}), intentando /collection...`);
+        try {
+          const collResult = await toteatService.getCollection(dateStr);
+          if (collResult.success && collResult.data) {
+            logger.info(`[${location.name}] Usando endpoint /collection`);
+            products = toteatService.parseCollectionToProducts(collResult.data);
+            ordenesCount = products.length;
+          }
+        } catch (collErr) {
+          logger.error(`[${location.name}] /collection también falló: ${collErr.message}`);
+          return { success: false, error: salesResult.message || collErr.message };
+        }
       }
 
-      if (!result.data || result.data.length === 0) {
+      if (!products || products.length === 0) {
         logger.warn(`[${location.name}] No hay ventas para el ${dateStr}`);
         return { success: false, error: 'No hay ventas para esta fecha' };
       }
-
-      const products = toteatService.parseSalesToProducts(result.data);
       const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
       const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
 
@@ -101,7 +131,7 @@ class SchedulerService {
       const filePath = await this.generateExcel(dateStr, products, porCategoria, {
         totalSinImpuesto,
         totalConImpuesto,
-        ordenes: result.data.length
+        ordenes: ordenesCount
       }, null, location.name);
 
       logger.info(`[${location.name}] Excel exportado: ${filePath}`);
@@ -126,7 +156,7 @@ class SchedulerService {
 
       const emailResult = await emailService.sendSalesReport(filePath, dateStr, {
         productos: products.length,
-        ordenes: result.data.length,
+        ordenes: ordenesCount,
         total: totalConImpuesto
       });
 
@@ -134,7 +164,7 @@ class SchedulerService {
         success: true,
         filePath,
         productos: products.length,
-        ordenes: result.data.length,
+        ordenes: ordenesCount,
         total: totalConImpuesto,
         emailSent: emailResult.success,
         marketmanUploaded
@@ -147,9 +177,16 @@ class SchedulerService {
   }
 
   /**
-   * Genera el archivo Excel en formato Marketman
+   * Genera el archivo Excel en formato MarketMan para un restaurante y período.
+   * Agrupa productos por nombre, suma cantidades y totales, y ordena por cantidad descendente.
+   * El archivo se guarda en /data/exports/ con el nombre ventas_<restaurante>_<fecha>.xlsx
    * @param {string} startDate - Fecha inicio (YYYY-MM-DD)
-   * @param {string} endDate - Fecha fin (YYYY-MM-DD), opcional
+   * @param {Array} products - Array de productos parseados desde Toteat
+   * @param {Object} porCategoria - Totales agrupados por categoría
+   * @param {{ totalSinImpuesto: number, totalConImpuesto: number }} totales - Totales generales
+   * @param {string|null} endDate - Fecha fin (YYYY-MM-DD), null si es un solo día
+   * @param {string} locationName - Nombre del restaurante (se usa en el Excel y en el nombre del archivo)
+   * @returns {string} Ruta absoluta del archivo generado
    */
   async generateExcel(startDate, products, porCategoria, totales, endDate = null, locationName = 'Domani') {
     const formatDate = (d) => { const [y, m, dd] = d.split('-'); return `${dd}/${m}/${y}`; };
@@ -222,9 +259,10 @@ class SchedulerService {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
 
     // Guardar archivo
+    const safeName = locationName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
     const fileName = endDate && endDate !== startDate
-      ? `ventas_domani_${startDate}_a_${endDate}.xlsx`
-      : `ventas_domani_${startDate}.xlsx`;
+      ? `ventas_${safeName}_${startDate}_a_${endDate}.xlsx`
+      : `ventas_${safeName}_${startDate}.xlsx`;
     const filePath = path.join(this.exportDir, fileName);
 
     XLSX.writeFile(wb, filePath);
@@ -233,10 +271,12 @@ class SchedulerService {
   }
 
   /**
-   * Exporta ventas de un rango de fechas a Excel
-   * @param {string} startDate
-   * @param {string} endDate
-   * @param {string|number} locIndex - índice de restaurante (1-based), opcional
+   * Exporta ventas de un rango de fechas a Excel para un restaurante específico.
+   * Usado desde el endpoint GET /api/export/download-range?start=&end=&loc=
+   * @param {string} startDate - Fecha inicio (YYYY-MM-DD)
+   * @param {string} endDate - Fecha fin (YYYY-MM-DD)
+   * @param {string|number} locIndex - Índice del restaurante (1-based, por orden en el .env). Default: 1
+   * @returns {{ success: boolean, filePath?: string, productos?: number, ordenes?: number, total?: number, error?: string }}
    */
   async runRangeExport(startDate, endDate, locIndex = 1) {
     logger.info(`Exportación de rango: ${startDate} a ${endDate}`);
@@ -286,74 +326,39 @@ class SchedulerService {
   }
 
   /**
-   * Ejecuta la exportación manualmente (para testing)
+   * Ejecuta la exportación manual para todos los restaurantes en una fecha específica.
+   * Llamado desde los endpoints /api/export, /api/export/trigger y /api/export/download.
+   * Si no se pasa fecha, exporta el día de ayer.
+   * @param {string|null} date - Fecha en formato YYYY-MM-DD, o null para exportar ayer
+   * @returns {{ success: boolean, results: Array }}
    */
   async runManualExport(date = null) {
-    if (date) {
-      const dateStr = date;
-      logger.info(`Exportación manual para fecha: ${dateStr}`);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dateStr = date || yesterday.toISOString().split('T')[0];
 
-      const locations = getLocations();
-      const location = locations[0];
-      const toteatService = new ToteatService(location ? location.toteat : {});
+    logger.info(`Exportación manual para fecha: ${dateStr}`);
 
-      const result = await toteatService.getSales(dateStr);
-
-      if (!result.success) {
-        return { success: false, error: result.message };
-      }
-
-      const products = toteatService.parseSalesToProducts(result.data);
-      const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
-      const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
-
-      const porCategoria = {};
-      products.forEach(p => {
-        if (!porCategoria[p.categoria]) {
-          porCategoria[p.categoria] = { cantidad: 0, totalSinIva: 0, totalConIva: 0 };
-        }
-        porCategoria[p.categoria].cantidad += p.cantidad;
-        porCategoria[p.categoria].totalSinIva += p.ventaSinImpuesto;
-        porCategoria[p.categoria].totalConIva += p.ventaConImpuesto;
-      });
-
-      const filePath = await this.generateExcel(dateStr, products, porCategoria, {
-        totalSinImpuesto,
-        totalConImpuesto,
-        ordenes: result.data.length
-      });
-
-      // Subir ventas a MarketMan
-      const marketmanResult = await marketmanService.uploadSales(dateStr, dateStr, products, {
-        totalSinImpuesto,
-        totalConImpuesto
-      });
-
-      if (marketmanResult.success) {
-        logger.info('Ventas subidas a MarketMan correctamente');
-      } else {
-        logger.warn(`MarketMan upload falló: ${marketmanResult.error}`);
-      }
-
-      // Enviar por email
-      const emailResult = await emailService.sendSalesReport(filePath, dateStr, {
-        productos: products.length,
-        ordenes: result.data.length,
-        total: totalConImpuesto
-      });
-
-      return {
-        success: true,
-        filePath,
-        productos: products.length,
-        ordenes: result.data.length,
-        total: totalConImpuesto,
-        emailSent: emailResult.success
-      };
+    const locations = getLocations();
+    if (locations.length === 0) {
+      return { success: false, error: 'No hay restaurantes configurados' };
     }
 
-    // Si no se especifica fecha, exportar ayer
-    return await this.exportYesterdaySales();
+    const results = [];
+    for (let i = 0; i < locations.length; i++) {
+      const location = locations[i];
+      logger.info(`=== Procesando: ${location.name} ===`);
+      const result = await this.exportLocationSales(location, dateStr);
+      results.push({ location: location.name, ...result });
+
+      // Pausa de 90 segundos entre restaurantes para respetar el rate limit de Toteat (1 req/min)
+      if (i < locations.length - 1) {
+        logger.info(`Esperando 90 segundos antes del siguiente restaurante...`);
+        await new Promise(resolve => setTimeout(resolve, 90000));
+      }
+    }
+
+    return { success: true, results };
   }
 }
 
