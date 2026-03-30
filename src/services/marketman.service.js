@@ -82,7 +82,7 @@ class MarketManService {
       const token = await this.getAccessToken();
 
       const fromDateUTC = `${startDate.replace(/-/g, '/')} 00:00:00`;
-      const toDateUTC = `${(endDate || startDate).replace(/-/g, '/')} 23:59:59`;
+      const toDateUTC = `${startDate.replace(/-/g, '/')} 23:59:59`;
       const containerID = startDate.replace(/-/g, '');
 
       // Sanitizar productos antes de enviarlos
