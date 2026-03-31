@@ -1,3 +1,17 @@
-const fromDateUTC = `${startDate.replace(/-/g, '/')} 00:00:00`;
-const toDateUTC = `${startDate.replace(/-/g, '/')} 23:59:59`;
-const containerID = startDate.replace(/-/g, '');
+// Updated implementation of marketman.service.js
+
+// Function to upload data using MarketMan APIs
+const uploadData = (data) => {
+    const startDate = data.startDate;
+    const fromDateUTC = startDate;
+    const toDateUTC = startDate;
+
+    // Call the MarketMan API with fromDateUTC and toDateUTC
+    MarketManAPI.upload({
+        fromDateUTC,
+        toDateUTC,
+        ...data
+    });
+};
+
+export { uploadData };
