@@ -207,6 +207,52 @@ class ToteatService {
   }
 
   /**
+   * Obtiene todos los productos (menu) desde la API de Toteat
+   */
+  async getProducts() {
+    try {
+      const url = `${this.config.baseUrl}/products?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}`;
+      logger.info(`Consultando todos los productos Toteat: ${url}`);
+      
+      const response = await axios.get(url, { timeout: 30000 });
+      if (response.data && response.data.data) {
+        // En /products a veces la data viene directo o en otro nivel
+        const productsList = Array.isArray(response.data.data) ? response.data.data : [];
+        return { success: true, data: productsList };
+      }
+      return { success: false, message: 'No se encontraron productos' };
+    } catch (error) {
+      logger.error('Error consultando productos Toteat:', error.message);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * Parse todos los productos de Toteat a formato base
+   */
+  parseProducts(productsData) {
+    const products = [];
+    if (!Array.isArray(productsData)) return products;
+    
+    for (const item of productsData) {
+      if (!item || !item.id) continue;
+      
+      products.push({
+        producto: (item.name || '').replace(/\\u[\dA-Fa-f]{4}/g, (m) =>
+            String.fromCharCode(parseInt(m.slice(2), 16))),
+        codigo: item.id || '',
+        precioUnitario: Math.round(item.price || 0),
+        cantidad: 0,
+        ventaSinImpuesto: 0,
+        ventaConImpuesto: 0,
+        categoria: item.category || 'OTROS'
+      });
+    }
+    
+    return products;
+  }
+
+  /**
    * Intenta llamar endpoints alternativos comunes para obtener ventas itemizadas
    * Devuelve el primer resultado que contenga datos relevantes
    */

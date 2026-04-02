@@ -111,9 +111,41 @@ class SchedulerService {
         }
       }
 
+      let soldProducts = products || [];
+
+      try {
+        const menuResult = await toteatService.getProducts();
+        if (menuResult.success && menuResult.data) {
+          const allProducts = toteatService.parseProducts(menuResult.data);
+          const mergedProductsMap = new Map();
+          
+          allProducts.forEach(p => mergedProductsMap.set(String(p.codigo), { ...p }));
+          
+          soldProducts.forEach(p => {
+            const codigo = String(p.codigo);
+            if (mergedProductsMap.has(codigo)) {
+              const ep = mergedProductsMap.get(codigo);
+              ep.cantidad += p.cantidad;
+              ep.ventaSinImpuesto += p.ventaSinImpuesto;
+              ep.ventaConImpuesto += p.ventaConImpuesto;
+            } else {
+              mergedProductsMap.set(codigo, { ...p });
+            }
+          });
+          
+          products = Array.from(mergedProductsMap.values());
+          logger.info(`[${location.name}] Productos de menu combinados con ventas: total ${products.length} productos`);
+        } else {
+          logger.warn(`[${location.name}] No se pudo obtener el menu completo, procediendo solo con ventas`);
+        }
+      } catch (err) {
+        logger.error(`[${location.name}] Error al obtener/combinar menu: ${err.message}`);
+      }
+
+      // Filtrar a todos en general. Si no hay productos (ni siquiera de menu), error.
       if (!products || products.length === 0) {
-        logger.warn(`[${location.name}] No hay ventas para el ${dateStr}`);
-        return { success: false, error: 'No hay ventas para esta fecha' };
+        logger.warn(`[${location.name}] No hay ventas ni productos para el ${dateStr}`);
+        return { success: false, error: 'No hay ventas ni productos para esta fecha' };
       }
       const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
       const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
@@ -296,7 +328,34 @@ class SchedulerService {
       return { success: false, error: 'No hay ventas para este rango de fechas' };
     }
 
-    const products = toteatService.parseSalesToProducts(result.data);
+    let soldProducts = toteatService.parseSalesToProducts(result.data);
+    
+    let products = soldProducts;
+    try {
+      const menuResult = await toteatService.getProducts();
+      if (menuResult.success && menuResult.data) {
+        const allProducts = toteatService.parseProducts(menuResult.data);
+        const mergedProductsMap = new Map();
+        
+        allProducts.forEach(p => mergedProductsMap.set(String(p.codigo), { ...p }));
+        
+        soldProducts.forEach(p => {
+          const codigo = String(p.codigo);
+          if (mergedProductsMap.has(codigo)) {
+            const ep = mergedProductsMap.get(codigo);
+            ep.cantidad += p.cantidad;
+            ep.ventaSinImpuesto += p.ventaSinImpuesto;
+            ep.ventaConImpuesto += p.ventaConImpuesto;
+          } else {
+            mergedProductsMap.set(codigo, { ...p });
+          }
+        });
+        
+        products = Array.from(mergedProductsMap.values());
+      }
+    } catch (err) {
+      logger.error(`Error combinando menu en rango: ${err.message}`);
+    }
     const totalSinImpuesto = products.reduce((sum, p) => sum + (p.ventaSinImpuesto || 0), 0);
     const totalConImpuesto = products.reduce((sum, p) => sum + (p.ventaConImpuesto || 0), 0);
 

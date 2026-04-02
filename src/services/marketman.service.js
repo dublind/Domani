@@ -101,7 +101,7 @@ class MarketManService {
           DateTimeFromUTC: fromDateUTC,
           DateTimeToUTC: toDateUTC,
           TotalSalesWithVAT: totales.totalConImpuesto,
-          TotalSalesWithoutVAT: totales.totalSinImpuesto
+          TotalSalesWithoutVAT: totales.totalConImpuesto // User requested without tax to equal with tax
         }
       };
 
@@ -145,6 +145,7 @@ class MarketManService {
         return { success: false, error: `Menu items fallaron: ${menuResult.error}` };
       }
 
+      // Enviar todos los productos (incluyendo los de venta 0) a los checks tal como pidio el usuairo
       // Filtrar productos cuyos menu items fallaron para no enviarlos en checks
       let productosParaChecks = productosSanitizados;
       if (menuResult.invalidItemIDs && menuResult.invalidItemIDs.length > 0) {
@@ -152,6 +153,8 @@ class MarketManService {
         productosParaChecks = productosSanitizados.filter(p => !invalidSet.has(String(p.codigo)));
         logger.info(`MarketMan: ${menuResult.invalidItemIDs.length} items excluidos de checks por ser invalidos en menu`);
       }
+
+      logger.info(`MarketMan: se enviaran ${productosParaChecks.length} items a checks (incluyendo los de venta 0)`);
 
       // 3. Crear checks con el detalle de productos (solo si menu items fue exitoso)
       const checksResult = await this.createChecks(containerID, startDate, productosParaChecks);
@@ -249,7 +252,7 @@ class MarketManService {
           ItemPOSID: String(p.codigo),
           CategoryPOSID: String(p.categoria || 'General'),
           QuantitySold: p.cantidad,
-          SalePriceWithoutTax: Math.round(p.ventaSinImpuesto),
+          SalePriceWithoutTax: Math.round(p.ventaConImpuesto), // User requested without tax to equal with tax
           SalePriceWithTax: Math.round(p.ventaConImpuesto)
         }]
       }));
@@ -335,7 +338,7 @@ class MarketManService {
         Name: p.producto,
         CategoryPOSID: String(p.categoria || 'General'),
         SalePriceWithTax: Math.max(0, p.precioUnitario || 0),
-        SalePriceWithoutTax: Math.max(0, Math.round((p.precioUnitario || 0) / 1.19)),
+        SalePriceWithoutTax: Math.max(0, p.precioUnitario || 0), // User requested without tax to equal with tax
         TypeID: 1,
         Type: 'MenuItem'
       }));
