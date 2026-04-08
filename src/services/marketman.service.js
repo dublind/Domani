@@ -21,7 +21,8 @@ class MarketManService {
     return text
       // Mantener solo caracteres ASCII seguros: letras, numeros, espacios, puntuacion basica
       // Incluye letras acentuadas comunes del espanol (á-ú, ñ, Á-Ú, Ñ)
-      .replace(/[^\w\sáéíóúñÁÉÍÓÚÑ&.,;:()/'"-]/g, '')
+      // Excluye & porque MarketMan lo rechaza en nombres y categorias
+      .replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()/'"-]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
