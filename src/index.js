@@ -8,6 +8,7 @@ const schedulerService = require('./services/scheduler.service');
 const emailService = require('./services/email.service');
 const marketmanService = require('./services/marketman.service');
 const { getLocations } = require('./config/locations');
+const { securityHeaders, basicAuth, validateQuery } = require('./middleware/security');
 
 // Crear directorio de logs si no existe
 const logsDir = path.join(__dirname, '..', 'logs');
@@ -17,7 +18,19 @@ if (!fs.existsSync(logsDir)) {
 
 // Crear aplicacion Express
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+app.set('trust proxy', 1); // Railway entrega las peticiones a traves de un proxy
+app.use(securityHeaders);
+app.use(express.json({ limit: '100kb' }));
+
+// Health check publico (Railway lo usa para saber si el servicio esta vivo)
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Todo lo demas requiere usuario y clave
+app.use(basicAuth);
+app.use(validateQuery);
 
 // Helper: obtener ToteatService para un índice de restaurante (1-based)
 function getToteatForLocation(locIndex) {
@@ -725,11 +738,6 @@ app.get('/api/export/download-range', async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-});
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'Domani Ventas API', timestamp: new Date().toISOString() });
 });
 
 // Iniciar servidor

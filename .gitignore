@@ -21,3 +21,6 @@ config.json
 # Archivos temporales
 *.tmp
 *.temp
+
+# Exportaciones con datos de ventas (no subir a git)
+data/exports/
