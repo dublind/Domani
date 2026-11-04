@@ -1,12 +1,13 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
+const { redact } = require('../middleware/security');
 
 class ToteatService {
   constructor(config = {}) {
     this.config = {
       baseUrl: config.baseUrl || 'https://api.toteat.com/mw/or/1.0',
-      token: config.token || process.env.LOC1_TOTEAT_TOKEN || 'C92Q8x9bq6Ix5QJWIQsvravh7Q1la7Np',
-      restaurantId: config.restaurantId || process.env.LOC1_TOTEAT_RESTAURANT_ID || '6512174172209152',
+      token: config.token || process.env.LOC1_TOTEAT_TOKEN,
+      restaurantId: config.restaurantId || process.env.LOC1_TOTEAT_RESTAURANT_ID,
       localId: config.localId || process.env.LOC1_TOTEAT_LOCAL_ID || '1',
       userId: config.userId || '1001'
     };
@@ -27,7 +28,7 @@ class ToteatService {
       // Todos los parametros van como query params segun documentacion Toteat
       const url = `${this.config.baseUrl}/collection?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&date=${dateStr}`;
 
-      logger.info(`URL: ${url}`);
+      logger.info(`URL: ${redact(url)}`);
 
       const response = await axios.get(url, {
         timeout: 30000
@@ -212,7 +213,7 @@ class ToteatService {
   async getProducts() {
     try {
       const url = `${this.config.baseUrl}/products?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}`;
-      logger.info(`Consultando todos los productos Toteat: ${url}`);
+      logger.info(`Consultando todos los productos Toteat: ${redact(url)}`);
       
       const response = await axios.get(url, { timeout: 30000 });
       if (response.data && response.data.data) {
@@ -263,7 +264,7 @@ class ToteatService {
     for (const ep of candidates) {
       try {
         const url = `${this.config.baseUrl}/${ep}?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&date=${dateStr}`;
-        logger.info(`Intentando endpoint alternativo: ${url}`);
+        logger.info(`Intentando endpoint alternativo: ${redact(url)}`);
         const resp = await axios.get(url, { timeout: 20000 });
         if (resp.data && resp.data.ok && resp.data.data) {
           // si trae orders o lista con elementos
@@ -302,7 +303,7 @@ class ToteatService {
     try {
       const url = `${this.config.baseUrl}/sales?xir=${this.config.restaurantId}&xil=${this.config.localId}&xiu=${this.config.userId}&xapitoken=${this.config.token}&ini=${startStr}&end=${endStr}`;
 
-      logger.info(`URL sales: ${url}`);
+      logger.info(`URL sales: ${redact(url)}`);
 
       const response = await axios.get(url, { timeout: 30000 });
 
