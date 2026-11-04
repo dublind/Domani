@@ -8,7 +8,7 @@ const schedulerService = require('./services/scheduler.service');
 const emailService = require('./services/email.service');
 const marketmanService = require('./services/marketman.service');
 const { getLocations } = require('./config/locations');
-const { securityHeaders, basicAuth, validateQuery } = require('./middleware/security');
+const { securityHeaders, requireLogin, mountAuthRoutes, validateQuery } = require('./middleware/security');
 
 // Crear directorio de logs si no existe
 const logsDir = path.join(__dirname, '..', 'logs');
@@ -22,14 +22,16 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1); // Railway entrega las peticiones a traves de un proxy
 app.use(securityHeaders);
 app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 
 // Health check publico (Railway lo usa para saber si el servicio esta vivo)
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Todo lo demas requiere usuario y clave
-app.use(basicAuth);
+// Login / logout publicos; todo lo demas requiere sesion iniciada
+mountAuthRoutes(app);
+app.use(requireLogin);
 app.use(validateQuery);
 
 // Helper: obtener ToteatService para un índice de restaurante (1-based)
@@ -356,7 +358,10 @@ app.get('/panel', (req, res) => {
           <div class="topbar-logo">🍕</div>
           <div class="topbar-name">Domani <span>Panel de Ventas</span></div>
         </div>
-        <div class="topbar-status" id="statusBadge">Cargando...</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="topbar-status" id="statusBadge">Cargando...</div>
+          <a href="/logout" class="topbar-status" style="text-decoration:none;color:#fff">Cerrar sesion</a>
+        </div>
       </div>
 
       <div class="page">
